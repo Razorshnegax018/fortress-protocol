@@ -2,14 +2,12 @@ use std::{collections::HashMap, time::Duration};
 
 use tokio::{sync::{mpsc}, time::Instant};
 
-use sha2::{Sha256, Digest};
-
 use tokio::{io::{self}, net::{TcpListener, TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}};
 use tokio_util::{codec::{Framed, LengthDelimitedCodec}};
 
 use futures::{SinkExt, StreamExt};
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Bytes, BytesMut};
 
 use serde::{Serialize, Deserialize};
 
@@ -36,7 +34,7 @@ pub struct Transaction {
 /** Data that the client sends to a peer when requesting a mutation */
 #[derive(Serialize, Deserialize)]
 pub struct ClientTransaction {
-    pub key: Bytes, pub value: Bytes, pub client_key: Bytes, pub signed_tx: Bytes
+    pub key: Bytes, pub value: Bytes, pub pubkey: Bytes, pub signed_tx: Bytes
 }
 
 /** Struct that packages required tools for consensus 
@@ -57,12 +55,11 @@ pub enum ActorRequest {
 }
 
 /** @util Takes in any generic result and maps it to type tokio `io::Result` so ? instead of expect can be used */
-fn io_err<T, E: std::fmt::Display>(result: Result<T, E>) -> io::Result<T> {
+pub fn io_err<T, E: std::fmt::Display>(result: Result<T, E>) -> io::Result<T> {
     result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
 pub struct RegistrationRequest { socket: OwnedWriteHalf, addr: std::net::SocketAddr }
-
 
 /// @function starts the leader node server. function that handles requests from peer nodes
 /// the consensus actor and the netowrk state actor are both started in this fn as long running tasks
@@ -72,19 +69,15 @@ pub async fn start_server(network_runtime: tokio::runtime::Handle) -> io::Result
     let listener = TcpListener::bind(ADDRESS).await.unwrap();
     let tools = ConsensusToolsStruct { 
         sequence_counter: 0, view_number: 0, registry, 
-        address_list: Vec::with_capacity(10)
-    };
+        address_list: Vec::with_capacity(10) };
 
     println!("Server started at {}", ADDRESS);
 
     // create the manager sender and receiver queue ends
     let (transaction_sender, mut transaction_receiver) = mpsc::channel::<Transaction>(32);
 
-    /*
-     * primary method of communicating with the hot loop
-     * @returns peer_tx: used by the reader_task so they can peers can communicate with hot loop task
-     * 
-     */
+    // primary method of communicating with the hot loop
+    // @returns peer_tx: used by the reader_task so they can peers can communicate with hot loop task
     let (peer_tx, peer_receiver) = mpsc::channel::<ActorRequest>(512);
 
     /* channel sender and receiver to add a new peer to the registry */
@@ -117,17 +110,16 @@ pub async fn start_server(network_runtime: tokio::runtime::Handle) -> io::Result
 
         let (read_socket, write_socket) = socket.into_split();
 
-        // on connection, the very first thing the peer should do is send the leader its pubkey
+        // prepare the reader socket for reading
         let mut read_framed = make_framed(read_socket);
 
+        // on connection, the very first thing the peer should do is send the leader its pubkey
         if let Some(Ok(packet)) = read_framed.next().await {
             // error handling is inside the function. Skip this connection if the peer sends a bad packet
-            let Ok(pubkey_packet) = deserialize_packet::<ConnectionPacket>(&packet)
-                else { continue; };
+            let Ok(pubkey_packet) = deserialize_packet::<ConnectionPacket>(&packet) else { continue; };
             
             // if client sends a packet that isn't listed with 'client-pubkey', bad packet
-            if pubkey_packet.node_type != Bytes::from_static(b"client-pubkey") 
-                { continue; }
+            if pubkey_packet.node_type != Bytes::from_static(b"client-pubkey") { continue; }
 
             // pass the read half and the request sender to a new reader task
             let _peer_tx = peer_tx.clone();
@@ -150,7 +142,7 @@ pub async fn start_server(network_runtime: tokio::runtime::Handle) -> io::Result
 ///  * @param tools: criical tools (seq_counter, view_number, peer_socket_registry)
 ///    required for consensus
 ///  * @param peer_receiver: entryway for peer sockets to communicate with consensus
-async fn consensus_actor(
+pub async fn consensus_actor(
     mut commit_sender: mpsc::Sender<Transaction>, mut tools: ConsensusTools, 
     mut peer_receiver: mpsc::Receiver<ActorRequest>, 
     mut registration_rx: local_channel::mpsc::Receiver<RegistrationRequest>) -> io::Result<()> {
@@ -173,9 +165,9 @@ async fn consensus_actor(
                 // client/peer node request to commit a transaction
                 ActorRequest::ConsensusRequest { transaction } => {
                     let tx = bincode::deserialize::<Transaction>(&transaction).unwrap();
-        
-                    consensus_engine(tx, &mut tools, 
-                    &mut peer_receiver, &mut commit_sender).await;
+
+                    // execute consensus
+                    consensus_engine(tx, &mut tools, &mut peer_receiver, &mut commit_sender).await;
                 },
                 _ => eprintln!("Invalid message from peer")
             }
@@ -208,7 +200,7 @@ async fn consensus_actor(
 /// * @param read_socket: the read half of the connection's socket, 
 /// to receive that connection's requests
 /// * @param peer_tx: sender channel to send transaction requests to the consensus actor
-async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: Bytes) -> io::Result<()> {
+pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: Bytes) -> io::Result<()> {
     // wait for messages from peer
     // framed next for the socket codec - framing entire messages
     while let Some(Ok(read_buffer)) = read_framed.next().await {
@@ -284,7 +276,7 @@ async fn consensus_engine(
     let mut quorum_counter = 0; sleep.as_mut().reset(deadline.into());
 
     // leader verifying the transaction themselves
-    verify_transaction(&transaction, &mut quorum_counter, seq_counter, view_number);
+    // verify_transaction(&transaction, &mut quorum_counter, seq_counter, view_number);
 
     tokio::select! {
         _ = wait_for_quorum(vote_reciever, &mut quorum_counter, b"PREPARE") => { println!("Quorum has been reached"); }
@@ -334,22 +326,23 @@ async fn consensus_engine(
 
 }
 
-fn verify_transaction(transaction: &Transaction, quorum_counter: &mut i32, seq_counter: u32, view_number: u32) {
-    let mut hasher = Sha256::new();
-    let mut hasher_buffer = BytesMut::new();
+pub async fn verify_transaction(
+    pubkey: Bytes, unsigned_msg: Bytes, request: ActorRequest,
+    signed_msg: Bytes, sender: mpsc::Sender<ActorRequest>
+) -> io::Result<()> {
+    // Step 1 - create the verifyng key from the pubkey bytes
+    let key_bytes: [u8; 32] = io_err(pubkey[..].try_into())?;
+    let verifying_key = io_err(VerifyingKey::from_bytes(&key_bytes))?;
 
-    hasher_buffer.put_u64(transaction.client_key); hasher_buffer.put(transaction.key.clone());
-    hasher_buffer.put(transaction.value.clone()); hasher.update(hasher_buffer);
+    // Step 2 - Create the "signature" (signed msg) from bytes
+    let signed_bytes: [u8; 64] = io_err(signed_msg[..].try_into())?;
+    let signature = Signature::from_bytes(&signed_bytes);
 
-    let tx_hash: [u8; 32] = hasher.finalize().into();
-
-    // verify the sequence counter and view number
-    let counter_valid = 
-        seq_counter == transaction.seq_counter &&
-        view_number == transaction.view_number;
-
-    // if the hashes match, add primary client's vote to the counter
-    if tx_hash == transaction.tx_hash && counter_valid == true { *quorum_counter += 1; }
+    // Step 3 - Verify client message/vote and send to engine if valid
+    match verifying_key.verify(&unsigned_msg[..], &signature) {
+        Ok(_) => { let _ = sender.send(request).await; },
+        Err(_) => { /* err */ }
+    } Ok(())
 }
 
 async fn wait_for_quorum(vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
