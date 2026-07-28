@@ -5,21 +5,20 @@ use std::sync::Arc;
 use rand::Rng;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncReadExt;
-use tokio::net::tcp::OwnedReadHalf;
 use tokio::sync::mpsc;
 use tokio::{io, net::{TcpListener, TcpStream}};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use futures::{AsyncRead, SinkExt, StreamExt};
+use futures::{SinkExt, StreamExt};
 
 use bytes::{Bytes, BytesMut, BufMut};
 
 use serde::{Serialize, Deserialize};
 
-use crate::protocol::infra_main::{ClientTransaction, Transaction};
+use crate::protocol::infra_main::{ActorRequest, ClientTransaction, Transaction, io_err, verify_transaction};
 
 use rand::rngs::OsRng;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{SigningKey, VerifyingKey};
 use ed25519_dalek::Signature;
 
 type PeerRegistry = Arc<Vec<TcpStream>>;
@@ -63,8 +62,7 @@ async fn start_peer_node() {
         // if deserialization of the connection packet from the bootnode fails,
         // log the error and skip the packet
         while let Some(Ok(value)) = socket_framed.next().await {
-            let Ok(packet) = deserialize_packet::<ConnectionPacket>(&value) 
-                else { continue; };
+            let Ok(packet) = deserialize_packet::<ConnectionPacket>(&value) else { continue; };
 
             // attempt connection to peer
             let address = String::from_utf8_lossy(&packet.address[..]);
@@ -81,10 +79,14 @@ async fn start_peer_node() {
     let leader_socket = 
         make_framed(_leader_socket.unwrap());
 
-    start_server(Arc::new(registry), leader_socket).await;
+    // create a private-public keypair
+    let mut csprng = OsRng;
+    let keypair: SigningKey = SigningKey::generate(&mut csprng);
+
+    start_server(Arc::new(registry), leader_socket, Arc::new(keypair)).await;
 }
 
-async fn start_server(registry: PeerRegistry, leader_socket: LeaderSocket) {
+async fn start_server(registry: PeerRegistry, leader_socket: LeaderSocket, keypair: Arc<SigningKey>) {
     // loop to try tcp connection again if port is taken up
     loop { let mut rng = rand::thread_rng();
         
@@ -107,48 +109,67 @@ async fn start_server(registry: PeerRegistry, leader_socket: LeaderSocket) {
                 }
             });
 
+            // connect to leader and make a framed from their socket
             let _socket = TcpStream::connect(LEADER_ADDRESS).await
                 .expect("Could not connect to leader node");
-
             let leader_socket = make_framed(_socket);
 
-            // TODO: spawn the consensus engine as a tokio task
 
+            // TODO - CONSENSUS ENGINE TASK
+            let (engine_tx, engine_rx) = mpsc::channel::<ActorRequest>(32);
+
+            // whenever a new connection is opened...
             while let Ok((socket, _)) = listener.accept().await {
                 let registry_clone = registry.clone();
+                let tx_clone = engine_tx.clone();
 
-                // TODO - get rid of the rc refcell and implement the channel actor model
-                tokio::task::spawn(async move { let _ = handle_request(socket, registry_clone).await; });
+                // and hand it off to handle_request for later logic
+                tokio::task::spawn(async move { let _ = handle_request(socket, registry_clone, tx_clone ).await; });
             }
         } else {} }
 }
 
-async fn handle_request(socket: TcpStream, registry: PeerRegistry) -> io::Result<()> {
-    let socket_codec = LengthDelimitedCodec::builder()
-        .length_field_length(2).little_endian().new_codec();
+async fn handle_request(socket: TcpStream, registry: PeerRegistry, engine_tx: mpsc::Sender<ActorRequest>) -> io::Result<()> {
+    let mut socket_framed = make_framed(socket);
 
-    let mut socket_framed = Framed::new(socket, socket_codec);
+    // first, decide if the connected machine is client or peer
+    if let Some(Ok(value)) = socket_framed.next().await {
+        let packet = deserialize_packet::<ConnectionPacket>(&value)?;
 
-    // Step 0A - create a private-public keypair
-    let mut csprng = OsRng;
-    let private_key: SigningKey = SigningKey::generate(&mut csprng);
+        match &packet.node_type[..] {
+            b"client" => {
+                    // step 1: verify the client transaction
+                    let client_tx: ClientTransaction = deserialize_packet::<ClientTransaction>(&packet.payload)?;
+                    let mut unsigned_msg = BytesMut::with_capacity(client_tx.key.len() + client_tx.value.len());
+
+                    unsigned_msg.extend_from_slice(&client_tx.key);
+                    unsigned_msg.extend_from_slice(&client_tx.value);
+
+                    // Step 2: Send the client transaction request to the consensus actor
+                    let request = ActorRequest::ConsensusRequest { transaction: packet.payload };
+
+                    // (handled inside the function with the var engine_tx)
+                    verify_transaction(client_tx.pubkey, unsigned_msg.freeze().clone(), 
+                        request, client_tx.signed_tx, engine_tx).await?;
+
+            }
+            _ => {}
+        }
+   }
 
 
     // handle requests from clients to the protocol only at this stage
     while let Some(Ok(value)) = socket_framed.next().await {
 
         // deserialize client transaction
-        let Ok(client_tx) = deserialize_packet::<ClientTransaction>(&value) 
-            else { continue; };
-
-
+        let Ok(client_tx) = deserialize_packet::<ClientTransaction>(&value) else { continue; };
     }
 
     Ok(())
 }
 
-async fn peer_consensus_engine(tx: ClientTransaction, registry: PeerRegistry) {
-    // connect to 
+async fn peer_consensus_engine(engine_rx: mpsc::Receiver<ActorRequest>, registry: PeerRegistry) {
+    
 }
 
 async fn request_client_mutation(transaction: ClientTransaction, leader_socket: &mut LeaderSocket) {
