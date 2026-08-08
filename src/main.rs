@@ -1,0 +1,112 @@
+use std::{thread::JoinHandle, time::Duration};
+
+use crossbeam::{channel::{unbounded}, select};
+use gdt_cpus::{AppliedPriority, ThreadPriority::Highest};
+use tokio::io::{self, Error, ErrorKind};
+use crate::protocol::{bootnode, utils::utils::io_err};
+
+pub mod protocol;
+pub mod database;
+pub mod file_server;
+pub mod message_server;
+
+
+fn create_bootnode() -> tokio::io::Result<()> {
+    std::thread::sleep(Duration::from_secs(1));
+
+    let bootnode_runtime = tokio::runtime::Builder
+        ::new_current_thread().enable_all().build()?;
+
+    let bootnode_set = tokio::task::LocalSet::new();
+
+    bootnode_set.block_on(&bootnode_runtime, bootnode::start_bootnode());
+
+    Ok(())
+}
+
+
+fn create_leader_node() -> tokio::io::Result<()> {
+    // make the multi-threaded reader runtime
+    let network_runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("receiver-worker-pool").enable_all().build()?;
+
+    // make the single-threaded runtime for the consensus engine
+    let consensus_runtime = tokio::runtime::Builder
+        ::new_current_thread().enable_all().build()?;
+
+    // the localset to run all tasks on single thread
+    let local = tokio::task::LocalSet::new();
+    
+    // start the conesus engine runtime with the localset
+    local.block_on(&consensus_runtime, async move {
+        let _ = protocol::infra_main::start_server(network_runtime).await;
+    });
+
+    Ok(())
+}
+
+async fn create_peer_node() -> tokio::io::Result<()> {
+    // make the multi-threaded reader runtime
+    let network_runtime = tokio::runtime::Builder::new_multi_thread()
+        .thread_name("receiver-worker-pool").enable_all().build()?;
+
+    // make the single-threaded runtime for the consensus engine
+    let consensus_runtime = tokio::runtime::Builder
+        ::new_current_thread().enable_all().build()?;
+
+    // the localset to run all tasks on single thread
+    let local = tokio::task::LocalSet::new();
+    
+    // start the conesus engine runtime with the localset
+    local.block_on(&consensus_runtime, async move {
+        let _ = protocol::infra_peer::start_peer_node(network_runtime).await;
+    });
+    Ok(())
+}
+
+fn main() -> tokio::io::Result<()> {
+    let (lead_tx, lead_rx) = unbounded::<&'static str>();
+    let (boot_tx, boot_rx) = unbounded::<&'static str>();
+    let (peer_tx, peer_rx) = unbounded::<&'static str>();
+
+    // Start the isolated leader node thread (which manages its own I/O pool)
+    let leader_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
+
+        // pin the leader node thread to core
+        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
+        if applied.effective() != Highest { eprintln!("Failed to pin leader to perf cluster"); }
+
+        let _ = create_leader_node(); lead_tx.send("fin").unwrap();
+
+        Ok(()) }); println!("Leader node thread created");
+
+    // Start the isolated bootnode thread
+    let bootnode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
+
+        // pin bootnode thread to core
+        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
+        if applied.effective() != Highest { eprintln!("Failed to pin leader to perf cluster"); }
+
+        let _ = create_bootnode(); boot_tx.send("fin").unwrap();
+
+        Ok(()) }); println!("Bootnode runtime started");
+
+    // create the peernode main multithreaded runtime
+    let peernode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
+        // pin a peer node node thread to core
+        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
+        if applied.effective() != Highest { eprintln!("Failed to pin peer to perf cluster"); }
+
+        let _ = create_peer_node(); peer_tx.send("fin").unwrap();
+
+        Ok(()) }); println!("Peernode runtime started");
+
+    // Wait for the threads to prevent main from exiting immediately
+    select! {
+        recv(lead_rx) -> _ => println!("leader closed"),
+        recv(boot_rx) -> _ => println!("bootnode closed"),
+        recv(peer_rx) -> _ => println!("peernode closed")
+    }
+
+    Ok(())
+}
