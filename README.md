@@ -218,3 +218,35 @@ This is unfortunately retroactive documentation that I started after the project
 
 - July 17th 
 	- 1:16 AM: Mostly util work on the infra peer done today. Made utils to automate the making of codecs and frameds. Poor sleep schedule - I mean like staying up all night and then not really sleeping during the day, going to bed around 1 or 2 am is actually an achievement for me - is finally really catching up to be and so locking in on actually important logic has been impossible 
+
+- August 1st
+	- Literally *just* started testing the code. Which is good, brings into view some contradictions to deal with:
+		- Should the bootnode connect to the leader first or the leader connect to the bootnode first? Let's reason about what failure looks like for each
+
+		#### BEWARE - THE REASONING BELOW IS COMPLETE NONSENSE
+
+		- Bootnode connects to leader - The bootnode is the ultimate relay station for the network, and while the network doesn't *run* without the leader, it doesn't *exist* without the bootnode. No new nodes could join. So bootnode tries to connect to leader, fails, and keeps trying 
+
+		- Bootnode should connect to the leader. The bootnode... (*realizes just spewed a bunch of nonsense*)
+
+		#### NONSENSE CONCLUDED
+
+		- Leader should connect to bootnode. If node A is connecting to node B, then the A -> B relationship *failing* needs to not be as dangerous than the other way around.
+
+		- Leader A, Bootnode B. If the leader connecting to the bootnode fails - the bootnode is offline - , you just...give the peer nodes the leader address and peer node addresses to connect to by hand
+
+		- Leader B, Bootnode A. if the bootnode connecting to the leader fails, right now as my code is written the network does not work. Even if I had leader change logic there would need to be a heavy consensus execution for a leader change. Much more expensive than copying and pasting some IP addresses into a vec
+
+		- Leader connecting to bootnode wins
+
+- August 8th
+	- Yes, we're still doing this. 
+
+	- Massive logic implementations for the Peer node. I was going with the flow on how the peer node was shaping up - an inverted version of the leader architecture, where the multithreaded runtime was the main runtime and the consensus engine actor was the one where I spawned and handed things off to.
+
+	- I wanted high code reusability between the two files, and with the inverted architecture that wasn't going to happen. So peer node architecture now reflects leader node. The main runtime is the consensus engine management runtime whereas
+
+		- This isn't the most optimal architecture. It would be more advantageous if the consensus logic only ran on its own core, so that conensus logic wouldn't have to fight onboarding logic for Li1 space
+
+- August 11th and 12th
+	- Finally optimized my deserialization loop to be zero copy - getting rid of the extra buffer bincode would allocate for data upon receiving bytes from the network. Caused a deep dive into lifetimes, refactoring ConnectionPacket to use `&'a [u8]` instead of `Bytes`, and, for the Bootnode Storage, needing to store peer addresses in a seperate storage struct that I hope bincode can translate between
