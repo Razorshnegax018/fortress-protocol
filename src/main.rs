@@ -1,8 +1,7 @@
 use std::{thread::JoinHandle, time::Duration};
 
 use crossbeam::{channel::{unbounded}, select};
-use gdt_cpus::{AppliedPriority, ThreadPriority::Highest};
-use tokio::io::{self, Error, ErrorKind};
+use gdt_cpus::ThreadPriority::Highest;
 use crate::protocol::{bootnode, utils::utils::io_err};
 
 pub mod protocol;
@@ -45,7 +44,9 @@ fn create_leader_node() -> tokio::io::Result<()> {
     Ok(())
 }
 
-async fn create_peer_node() -> tokio::io::Result<()> {
+fn create_peer_node() -> tokio::io::Result<()> {
+    println!("Peernode runtime started");
+
     // make the multi-threaded reader runtime
     let network_runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("receiver-worker-pool").enable_all().build()?;
@@ -56,10 +57,10 @@ async fn create_peer_node() -> tokio::io::Result<()> {
 
     // the localset to run all tasks on single thread
     let local = tokio::task::LocalSet::new();
-    
+
     // start the conesus engine runtime with the localset
     local.block_on(&consensus_runtime, async move {
-        let _ = protocol::infra_peer::start_peer_node(network_runtime).await;
+        let _ = protocol::infra_peer::discover_network(network_runtime).await;
     });
     Ok(())
 }
@@ -70,7 +71,7 @@ fn main() -> tokio::io::Result<()> {
     let (peer_tx, peer_rx) = unbounded::<&'static str>();
 
     // Start the isolated leader node thread (which manages its own I/O pool)
-    let leader_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
+    let _leader_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
 
         // pin the leader node thread to core
         let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
@@ -81,7 +82,7 @@ fn main() -> tokio::io::Result<()> {
         Ok(()) }); println!("Leader node thread created");
 
     // Start the isolated bootnode thread
-    let bootnode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
+    let _bootnode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
 
         // pin bootnode thread to core
         let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
@@ -92,14 +93,14 @@ fn main() -> tokio::io::Result<()> {
         Ok(()) }); println!("Bootnode runtime started");
 
     // create the peernode main multithreaded runtime
-    let peernode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
+    let _peernode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
         // pin a peer node node thread to core
         let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
         if applied.effective() != Highest { eprintln!("Failed to pin peer to perf cluster"); }
 
         let _ = create_peer_node(); peer_tx.send("fin").unwrap();
 
-        Ok(()) }); println!("Peernode runtime started");
+        Ok(()) }); 
 
     // Wait for the threads to prevent main from exiting immediately
     select! {
