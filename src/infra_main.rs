@@ -1,20 +1,17 @@
-use std::{collections::HashMap, fmt::Write, io::ErrorKind, pin::Pin, time::Duration};
-
-use sha2::digest::typenum::Length;
-use tokio::{io::AsyncWriteExt, sync::mpsc, time::{Instant, Sleep}};
-
-use tokio::{io::{self}, net::{TcpListener, TcpStream, tcp::{OwnedReadHalf, OwnedWriteHalf}}};
-use tokio_util::{codec::{Framed, LengthDelimitedCodec}};
-
-use futures::{SinkExt, StreamExt};
+use std::{collections::HashMap, io::{self, ErrorKind},time::Duration};
 
 use bytes::{Bytes, BytesMut};
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+use futures::{SinkExt, StreamExt};
+use tokio::{io::AsyncWriteExt, net::{tcp::{OwnedReadHalf, OwnedWriteHalf}, 
+    TcpListener, TcpStream, }, sync::mpsc, time::Instant};
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use ed25519_dalek::{Signature, VerifyingKey, Verifier};
-
-use crate::protocol::infra_peer::{ConnectionPacket, deserialize_packet, make_framed, serialize_into};
+use crate::protocol::{
+    infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, io_err, make_framed, send_connection_packet, serialize_into, verify_transaction, wait_for_quorum},
+};
 
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 type ReadFramed = Framed<OwnedReadHalf, LengthDelimitedCodec>;
@@ -28,14 +25,15 @@ static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 #[derive(Serialize, Deserialize)]
 pub struct Transaction {
     pub consensus_stage: String, pub tx_hash: [u8; 32], 
-    pub seq_counter: u32, pub view_number: u32, pub client_key: u64,
+    pub seq_counter: u32, pub view_number: u32, pub client_key: Bytes,
     pub source: Bytes, pub key: Bytes, pub value: Bytes,
 }
 
 /** Data that the client sends to a peer when requesting a mutation */
 #[derive(Serialize, Deserialize)]
-pub struct ClientTransaction {
-    pub key: Bytes, pub value: Bytes, pub pubkey: Bytes, pub signed_tx: Bytes
+pub struct ClientTransaction<'a> {
+    #[serde(borrow)] pub key: &'a [u8], #[serde(borrow)] pub value: &'a [u8], 
+    #[serde(borrow)] pub pubkey: &'a [u8], #[serde(borrow)] pub signed_tx: &'a [u8]
 }
 
 /** Struct that packages required tools for consensus 
@@ -55,12 +53,7 @@ pub enum ActorRequest {
     PeerVote { vote_type: Bytes, signed_msg: Bytes, unsigned_msg: Bytes }
 }
 
-/** @util Takes in any generic result and maps it to type tokio `io::Result` so ? instead of expect can be used */
-pub fn io_err<T, E: std::fmt::Display>(result: Result<T, E>) -> io::Result<T> {
-    result.map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
-}
-
-pub struct RegistrationRequest { socket: OwnedWriteHalf, addr: std::net::SocketAddr }
+pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: std::net::SocketAddr }
 
 /// @function starts the leader node server. function that handles requests from peer nodes
 /// the consensus actor and the netowrk state actor are both started in this fn as long running tasks
@@ -100,18 +93,14 @@ pub async fn start_server(network_runtime: tokio::runtime::Runtime) -> io::Resul
 
     let reader_runtime = network_runtime.handle().clone();
 
-    // small wait for testing
-    std::thread::sleep(Duration::from_secs(1));
-
     // Start the consensus actor task
     let _consensus_task = tokio::task::spawn_local(
-        consensus_actor(commit_sender, tools, peer_receiver, registration_rx));
+        leader_consensus_actor(commit_sender, tools, peer_receiver, registration_rx));
 
     // create a reusable timout timer
-    let sleep = tokio::time::sleep(Duration::from_millis(100));
+    let sleep = tokio::time::sleep(Duration::from_millis(500));
 
-    let deadline = Instant::now() + Duration::from_millis(100);
-    tokio::pin!(sleep); sleep.as_mut().reset(deadline.into());
+    tokio::pin!(sleep);
 
     // create a buffer to store the result from the select
     let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
@@ -121,11 +110,15 @@ pub async fn start_server(network_runtime: tokio::runtime::Runtime) -> io::Resul
         let (read_socket, write_socket) = socket.into_split();
 
         // prepare the reader socket for reading
-        let mut read_framed = make_framed(read_socket);
+        let mut read_framed = make_framed(read_socket, 512);
+
+        // start the timer
+        let deadline = Instant::now() + Duration::from_millis(2000);
+        sleep.as_mut().reset(deadline.into());
 
         // select between the connceted client responding and a timeout
         tokio::select! { value = read_framed.next() => { network_buffer = value } 
-            _ = &mut sleep => { eprintln!("client didn't respond in time, dropping"); continue; } } 
+            _ = &mut sleep => { eprintln!("from leader - client didn't respond in time, dropping"); continue; } } 
 
         // on connection, the very first thing the peer should do is send the leader its pubkey
         if let Some(Ok(packet)) = network_buffer {
@@ -133,18 +126,20 @@ pub async fn start_server(network_runtime: tokio::runtime::Runtime) -> io::Resul
             let Ok(pubkey_packet) = deserialize_packet::<ConnectionPacket>(&packet) 
                 else { eprintln!("peer sent a bad packet, dropping connection"); continue; };
             
-            // if client sends a packet that isn't listed with 'client-pubkey', bad packet
-            if pubkey_packet.node_type != Bytes::from_static(b"client-pubkey") 
+            // if client sends a packet that isn't listed with 'peer-pubkey', bad packet
+            if pubkey_packet.node_type != Bytes::from_static(b"peer-pubkey") 
                 { eprintln!("peer didn't send their pubkey, dropping connection"); continue; }
 
             // pass the read half and the request sender to a new reader task
             let _peer_tx = peer_tx.clone();
-            reader_runtime.spawn(reader_task(read_framed, _peer_tx, pubkey_packet.payload)); 
+            reader_runtime.spawn(reader_task(read_framed, _peer_tx, Box::from(pubkey_packet.payload))); 
 
             // send a registration request to the consensus enigne receiver to register the write half
             let request = RegistrationRequest { socket: write_socket, addr };
 
             let _ = registration_tx.send(request);
+
+            println!("Peer address {:?} registered", std::str::from_utf8(&pubkey_packet.address));
         }
     }
 
@@ -157,13 +152,15 @@ pub async fn start_server(network_runtime: tokio::runtime::Runtime) -> io::Resul
 ///  * @param tools: criical tools (seq_counter, view_number, peer_socket_registry)
 ///    required for consensus
 ///  * @param peer_receiver: entryway for peer sockets to communicate with consensus
-pub async fn consensus_actor(
+pub async fn leader_consensus_actor(
     mut commit_sender: mpsc::Sender<Transaction>, mut tools: ConsensusTools, 
     mut peer_receiver: mpsc::Receiver<ActorRequest>, 
     mut registration_rx: local_channel::mpsc::Receiver<RegistrationRequest>) {
 
-
+    // you gotta split the nodes into files/cmdline args and 
+    // get rid of these sleeps
     std::thread::sleep(Duration::from_millis(500));
+    
     let bootnode_socket = TcpStream::connect(BOOTNODE_ADDRESS).await
         .expect("Connection to bootnode failed");
 
@@ -188,7 +185,7 @@ pub async fn consensus_actor(
                     let tx = bincode::deserialize::<Transaction>(&transaction).unwrap();
 
                     // execute consensus
-                    consensus_engine(tx, &mut tools, &mut peer_receiver, &mut commit_sender).await;
+                    consensus_engine(tx, &mut tools, &mut peer_receiver, &mut commit_sender, &mut serialize_pool).await;
                 },
                 _ => eprintln!("Invalid message from peer")
             }
@@ -202,11 +199,8 @@ pub async fn consensus_actor(
             // add the address to the address list
             tools.address_list.push(request.addr);
 
-            // make a copy of the registry to send
-            let addrs = tools.address_list.clone();
-
             // serialize the addresses into the heap buffer
-            let addr_packet = serialize_into(&mut serialize_pool, &addrs);
+            let addr_packet = serialize_into(&mut serialize_pool, &tools.address_list);
 
             // send the entire list as a serialized Vec<SocketAddr>
             let _ = bootnode_framed.send(addr_packet.freeze()).await;
@@ -220,13 +214,13 @@ pub async fn consensus_actor(
 /// * @param read_socket: the read half of the connection's socket, 
 /// to receive that connection's requests
 /// * @param peer_tx: sender channel to send transaction requests to the consensus actor
-pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: Bytes) -> io::Result<()> {
+pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: Box<[u8]>) -> io::Result<()> {
     // wait for messages from peer
     // framed next for the socket codec - framing entire messages
     while let Some(Ok(read_buffer)) = read_framed.next().await {
 
         // Step 1 - deserailize client request (change for proper error handling)
-        match bincode::deserialize::<ActorRequest>(&read_buffer) {
+        match deserialize_packet::<ActorRequest>(&read_buffer) {
 
             // Step 2 - send either transaction payload or vote to the consensus actor
             // (all recievers expect payload type ActorRequest 
@@ -263,17 +257,23 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
     Ok(())
 }
 
-async fn consensus_engine(
+/// @function CPU bound consensus engine function to be ran per consensus
+/// * @param transaction: Transaction to be committed to the network/chain
+/// * @param tools: Tools (registery, sequence counter, view number) for consensus
+/// * @param vote receiver: the recieving end of the channel all peers send their votes through
+/// * @param commit sender: the sending end of the channel to send the final transaction back to the state manager
+pub async fn consensus_engine(
     transaction: Transaction, 
     tools: &mut ConsensusTools, 
     vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
-    commit_sender: &mut mpsc::Sender<Transaction>) {
+    commit_sender: &mut mpsc::Sender<Transaction>, 
+    serialization_pool: &mut BytesMut) {
 
     // STEP 1: broadcast the proposed transaction to each peer in the network registry
 
     // Encode the transaction and prepare to send it
-    let tx_bytes = bincode::serialize(&transaction).unwrap();
-    let tx_payload = Bytes::from(tx_bytes);
+    let tx_bytes = serialize_into(serialization_pool, &transaction);
+    let tx_payload = tx_bytes.freeze().clone();
 
     let sleep = tokio::time::sleep(Duration::from_millis(100));
 
@@ -296,6 +296,7 @@ async fn consensus_engine(
     let mut quorum_counter = 0; sleep.as_mut().reset(deadline.into());
 
     // leader verifying the transaction themselves
+    // verify_transaction(pubkey, unsigned_msg, request, signed_msg, sender);
     // verify_transaction(&transaction, &mut quorum_counter, seq_counter, view_number);
 
     tokio::select! {
@@ -344,67 +345,4 @@ async fn consensus_engine(
         tools.sequence_counter = 0; tools.view_number += 1;
     }
 
-}
-
-/// @util cryptographically verifies a given transacton
-/// * @params pubkey, unsigned msg, signed msg - all required for signing 
-/// * @params request, sender - most transactions are contained inside @param request objects
-/// that will be set to a different task using the @param sender
-pub async fn verify_transaction(
-    pubkey: Bytes, unsigned_msg: Bytes, request: ActorRequest,
-    signed_msg: Bytes, sender: mpsc::Sender<ActorRequest>
-) -> io::Result<()> {
-    // Step 1 - create the verifyng key from the pubkey bytes
-    let key_bytes: [u8; 32] = io_err(pubkey[..].try_into())?;
-    let verifying_key = io_err(VerifyingKey::from_bytes(&key_bytes))?;
-
-    // Step 2 - Create the "signature" (signed msg) from bytes
-    let signed_bytes: [u8; 64] = io_err(signed_msg[..].try_into())?;
-    let signature = Signature::from_bytes(&signed_bytes);
-
-    // Step 3 - Verify client message/vote and send to engine if valid
-    match verifying_key.verify(&unsigned_msg[..], &signature) {
-        Ok(_) => { let _ = sender.send(request).await; },
-        Err(_) => { /* err */ }
-    } Ok(())
-}
-
-fn return_err() -> Result<ConnectionPacket, std::io::Error> { return Err(io::Error::new(ErrorKind::ConnectionRefused, "dropped")) }
-
-/// @util crafts and sends a ConnectionPacket through a given TCP connection
-pub async fn send_connection_packet<Writer>(
-    node_type: &'static str, addr: &'static str, payload: Option<BytesMut>, 
-    socket: &mut Framed<Writer, LengthDelimitedCodec>, pool: &mut BytesMut
-) where Writer: AsyncWriteExt + Unpin {
-
-    // craft the connection packet
-    let mut packet = ConnectionPacket {
-        address: Bytes::from_static(addr.as_bytes()), payload: Bytes::new(),
-        node_type: Bytes::from_static(node_type.as_bytes()) };
-
-    // add the payload if it exists
-    if let Some(send_payload) = payload { packet.payload = send_payload.freeze(); }
-
-    // serialize into bytes using the pool
-    let send_packet = serialize_into(pool, &packet);
-
-    // send the ConnectionPacket
-    let _ = socket.send(send_packet.freeze()).await;
-}
-
-/// @util takes a tcp connection and tries connecting several times
-pub fn connect_retry(addr: &'static str) -> TcpStream { todo!(); }
-
-async fn wait_for_quorum(vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
-        quorum_counter: &mut i32, stage: &'static [u8]) {
-
-    while let Some(value) = vote_reciever.recv().await {
-        match value {
-            ActorRequest::PeerVote { vote_type, signed_msg: _, unsigned_msg: _ } => {
-                if vote_type == Bytes::from_static(stage) { 
-                    *quorum_counter += 1; 
-                } if *quorum_counter >= 3 { break; }
-            }, _ => {}
-        }
-    }
 }
