@@ -9,14 +9,14 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 
 use crate::protocol::{infra_peer::ConnectionPacket,
-	utils::utils::{deserialize_packet, make_framed, serialize_into}};
+	utils::utils::{deserialize_packet, make_framed}};
 
 pub static BOOTNODE_ADDRESS: &'static str = "127.0.0.1:1100";
 
 static UPDATED_LIST: AtomicBool = AtomicBool::new(false);
 
 #[derive(Serialize)]
-struct StoragePacket { node_type: &'static str, address: Bytes, payload: Bytes }
+struct StoragePacket { node_type: &'static [u8], address: Bytes, payload: Bytes }
 
 /// The list with all the peer addresses, stored as storage packets. 
 /// They need to stored as unserialized Storage packets because 
@@ -62,7 +62,7 @@ pub async fn start_bootnode() {
 
 				// make the connection packet for storage
 				let packet = StoragePacket {
-					node_type: "client", address: Bytes::copy_from_slice(&ip), payload: Bytes::new() };
+					node_type: b"client", address: Bytes::copy_from_slice(&ip), payload: Bytes::new() };
 
 				// extend the list with the new connection packet
 				write_lock.push(packet);
@@ -87,17 +87,18 @@ pub async fn start_bootnode() {
 
 		println!("Bootnode waiting for new nodes to join...");
 
+		// create a reusable timout timer
+		let sleep = tokio::time::sleep(Duration::from_millis(500));
+
+		tokio::pin!(sleep);
+
 		// create the option wrapper for the leader sender
 		let mut leader_tx = Some(_leader_tx);
 		while let Ok((socket, addr)) = listener.accept().await {
-			println!("New node addr {} joined", addr.to_string());
+			println!("FROM BOOTNODE - New node addr {} joined", addr.to_string());
 
-			// create a reusable timout timer
-			let sleep = tokio::time::sleep(Duration::from_millis(100));
-
-			let deadline = Instant::now() + Duration::from_millis(100);
-			tokio::pin!(sleep); sleep.as_mut().reset(deadline.into());
-			// let list = &mut *join_task_list.lock().await;
+			let deadline = Instant::now() + Duration::from_millis(500);
+			sleep.as_mut().reset(deadline.into());
 
 			// create a framed for the connected machine - leader or peer
 			// TODO - dynamically split and rebuild to change size depending of if it's leader or peer
@@ -126,10 +127,15 @@ pub async fn start_bootnode() {
 
 						// push the connection bytes into the list
 						let storage_packet = StoragePacket {
-							node_type: "leader", address: Bytes::copy_from_slice(connected_packet.address),
+							node_type: b"leader", address: Bytes::copy_from_slice(connected_packet.address),
 							payload: Bytes::copy_from_slice(connected_packet.payload) };
 
 						list.push(storage_packet); println!("Leader socket connected and verified");
+
+						println!("List len after pushing leader packet: {}", list.len());
+
+						// updated list - toggle updated list flag
+						UPDATED_LIST.store(true, Ordering::Release);
 					}, 
 
 					// if the connection request is from a peer,
@@ -140,7 +146,7 @@ pub async fn start_bootnode() {
 							payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
 
 							// serialize the address list into the payload
-							serialize_into(&mut payload, list);
+							bincode::serialize_into((&mut payload).writer(), list).unwrap();
 						} // if not, skip rebuild send the cached payload
 						
 						// send the full address list to the client
