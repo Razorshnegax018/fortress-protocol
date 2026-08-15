@@ -32,8 +32,9 @@ static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 
 #[derive(Serialize, Deserialize)]
 pub struct ConnectionPacket<'a> {
-    #[serde(borrow)] pub node_type: &'a [u8], #[serde(borrow)] pub address: &'a [u8], 
-    #[serde(borrow)] pub payload: &'a [u8]
+    #[serde(borrow, with = "serde_bytes")] pub node_type: &'a [u8], 
+    #[serde(borrow, with = "serde_bytes")] pub address: &'a [u8], 
+    #[serde(borrow, with = "serde_bytes")] pub payload: &'a [u8]
 }
 
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
@@ -43,11 +44,11 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
     let mut registry: Vec<SocketFramed> = Vec::with_capacity(12);
 
     // leader socket that may or may not exist
-    let mut _leader_socket: Option<TcpStream> = None;
+    let mut leader_socket: Option<SocketFramed> = None;
 
     // grab the port from the cmdline
-    let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
-    let address = format!("127.0.0.1:{}", port);
+    // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
+    let address = format!("127.0.0.1:{}", "6376");
 
     // general use serialize pool
     let mut serialize_pool = BytesMut::with_capacity(1024);
@@ -62,39 +63,58 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
     // create channel for sending consensus requests
     let (engine_tx, peer_rx) = mpsc::channel::<ActorRequest>(32);
 
+    // the bootnode needs to have connected with the leader before the peer does
+    // TODO - these sleeps suck
+    // * 1) - Split the three nodes into their own files. Please
+    // * 2) - Implement a retry function when connecting to bootnode
+    std::thread::sleep(Duration::from_secs(5));
+
+    println!("Starting connection to bootnode...");
     if let Ok(socket) = TcpStream::connect(BOOTNODE_ADDRESS).await {
         let mut socket_framed = make_framed(socket, 1024);
+
+        // send a pubkey confirmation packet 
+        send_connection_packet("peer-pubkey", &address, 
+            Some(&pubkey), &mut socket_framed, &mut serialize_pool).await;
 
         // if deserialization of the connection packet from the bootnode fails,
         // log the error and skip the packet
         if let Some(Ok(value)) = socket_framed.next().await {
             let Ok(list) = deserialize_packet::<Vec<ConnectionPacket>>(&value) else { 
+                println!("{:?}", &value[..]);
+
                 // TODO - refactor to not panic
                 panic!("Bootnode sent bad packet");
             };
 
-            // send a pubkey confirmation packet 
-            send_connection_packet("peer-pubkey", &address, 
-                Some(&pubkey), &mut socket_framed, &mut serialize_pool).await;
-
-            for addr in list {
+            for packet in list {
                 // connect to peer 
-                match TcpStream::connect(&*address).await {
-                    // TODO - make sure to get the leader's pubkey
+                match TcpStream::connect(std::str::from_utf8(&packet.address).unwrap()).await {
+
+                    // we need to spawn reader tasks for each of the sockets the bootnode gave us
                     Ok(stream) => { 
+                        // 1) split the sockets into read and write and create frameds for them
+                        let (reader, writer) = stream.into_split();
+
+                        let read_framed = make_framed(reader, 512);
+                        let mut write_framed = make_write_framed(writer, 512);
+
+                        if packet.node_type == b"leader" { 
+                            println!("Peernode connected to leader socket"); 
                         
-                        if addr.node_type == b"leader" { _leader_socket = Some(stream); } 
+                            // send a pubkey confirmation packet to leader
+                            send_connection_packet("peer-pubkey", &address, 
+                            Some(&pubkey), &mut write_framed, &mut serialize_pool).await;
 
-                        
-                        // we need to spawn reader tasks for each of the sockets the bootnode gave us
-                        else {
-                            // 1) split the sockets into read and write and create frameds for them
-                            let (reader, writer) = stream.into_split();
+                            leader_socket = Some(write_framed);
 
-                            let read_framed = make_framed(reader, 512);
-                            let mut write_framed = make_write_framed(writer, 512);
+                            // 2) clone the consensus engine sender to hand off to the reader task
+                            let peer_tx = engine_tx.clone();
 
-                            // send a pubkey confirmation packet 
+                            // 3) then, for each reader, spawn a new reader task
+                            reader_runtime.spawn(reader_task(read_framed, peer_tx, Box::from(pubkey)));
+                        } else {
+                            // send a pubkey confirmation packet to peer
                             send_connection_packet("peer-pubkey", &address, 
                             Some(&pubkey), &mut write_framed, &mut serialize_pool).await;
 
@@ -106,33 +126,32 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
 
                             // 3) then, for each reader, spawn a new reader task
                             reader_runtime.spawn(reader_task(read_framed, peer_tx, Box::from(pubkey)));
-                        }},
+                        }
+                    },
                     Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*address); }
                 }
             }
         }
     } 
 
-    if _leader_socket.is_none() { panic!("No leader node found") }
-    let leader_socket = 
-        make_framed(_leader_socket.unwrap(), 512);
+    if leader_socket.is_none() { panic!("No leader node found") }
 
-    if let Err(e) = start_server(registry, leader_socket, Arc::new(keypair), address, 
+    if let Err(e) = start_server(registry, leader_socket.unwrap(), Arc::new(keypair), address, 
         network_runtime, engine_tx, peer_rx).await 
             { eprintln!("Peer node server exited with Error: {}", e); } println!("Peer node server closed")
 }
 
 async fn start_server(
     registry: Vec<SocketFramed>, 
-    leader_socket: LeaderSocket, 
+    leader_socket: SocketFramed, 
     keypair: Arc<SigningKey>, address: String,
     network_runtime: tokio::runtime::Runtime,
     engine_tx: mpsc::Sender<ActorRequest>,
     peer_rx: mpsc::Receiver<ActorRequest>) -> io::Result<()> {
 
-    let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
+    // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
 
-    if let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{}", port)).await {
+    if let Ok(listener) = TcpListener::bind(address).await {
         // create the manager sender and reciever queue ends
         let (commit_sender, mut tx_reciever) = mpsc::channel::<Transaction>(32);
 
@@ -174,7 +193,7 @@ async fn start_server(
         // create a buffer to store the result from the select
         let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
         while let Ok((socket, addr)) = listener.accept().await {
-            println!("Peer node {addr} connected to primary");
+            println!("Peer node {addr} connected to running peer node");
 
             let (read_socket, write_socket) = socket.into_split();
 
@@ -239,7 +258,7 @@ async fn start_server(
 /// @function consensus actor: actor handler for the consensus engine hot loop
 ///  * @param `commit_sender`: Sender end of channel engine uses 
 ///    to send completed transactions back to state manager 
-///  * @param `tools`: criical tools (seq_counter, view_number, peer_socket_registry)
+///  * @param `tools`: critical tools (seq_counter, view_number, peer_socket_registry)
 ///    required for consensus
 ///  * @param `peer_receiver`: entryway for peer sockets to communicate with consensus
 ///  * @param `registration_rx`: receiver end of the channel the main runtime sends peer registration requestes through
@@ -247,8 +266,6 @@ async fn peer_consensus_actor(
     mut commit_sender: mpsc::Sender<Transaction>, mut tools: ConsensusTools, 
     mut peer_rx: mpsc::Receiver<ActorRequest>, 
     mut registration_rx: local_channel::mpsc::Receiver<RegistrationRequest>) {
-
-    std::thread::sleep(Duration::from_millis(500));
 
     let socket_codec = LengthDelimitedCodec::builder()
         .length_field_length(2).little_endian().new_codec();
