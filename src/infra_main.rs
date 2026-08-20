@@ -306,6 +306,7 @@ pub async fn consensus_engine(
 
     tokio::pin!(sleep);
 
+    let seq_counter = transaction.seq_counter;
     let tx_request = ActorRequest::ConsensusRequest { transaction };
 
     // STEP 1: broadcast the proposed transaction to each peer in the network registry
@@ -363,8 +364,10 @@ pub async fn consensus_engine(
 
     // reset the quorum and timer for the COMMIT vote
     let mut quorum_counter = 0; reset_timer(&mut sleep, 3000);
+    let sequence_counters = (tools.sequence_counter, seq_counter);
+
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
@@ -395,7 +398,7 @@ pub async fn consensus_engine(
     }
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, &mut quorum_counter, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
 
         _ = &mut sleep => 
             { return return_err("Time limit exceeded, prepare verification failed"); }
