@@ -12,7 +12,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    infra_peer::{ConnectionPacket, LeaderSocket}, utils::utils::{connect_with_retry, deserialize_packet, io_err, make_framed, reset_timer, return_err, send_connection_packet, send_with_timeout, serialize_into, verify_transaction, wait_for_quorum},
+    infra_peer::ConnectionPacket, utils::utils::{connect_with_retry, deserialize_packet, io_err, make_framed, reset_timer, return_err, send_connection_packet, send_with_timeout, serialize_into, verify_transaction, wait_for_quorum},
 };
 
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
@@ -206,8 +206,8 @@ pub async fn leader_consensus_actor(
                 // client/peer node request to commit a transaction
                 ActorRequest::ConsensusRequest { transaction } => {
                     // execute consensus
-                    match consensus_engine(transaction, &mut tools, true, &mut peer_receiver, 
-                        &mut commit_sender, &mut serialize_pool, None, &mut keypair).await {
+                    match consensus_engine(transaction, &mut tools, &mut peer_receiver, 
+                        &mut commit_sender, &mut serialize_pool, &mut keypair).await {
                             Ok(_) => { println!("Consensus has been reached"); },
                             Err(e) => { eprintln!("Consensus failed with error: {}", e); }
                         }
@@ -290,17 +290,15 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
 /// * @param signing key: the private key that the current node uses to sign their vote certs
 pub async fn consensus_engine(
     transaction: Transaction, 
-    tools: &mut ConsensusTools, leader: bool,
+    tools: &mut ConsensusTools,
     vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
     commit_sender: &mut mpsc::Sender<Transaction>, 
     serialization_pool: &mut BytesMut,
-    leader_socket: Option<LeaderSocket>,
     signing_key: &mut SigningKey) -> io::Result<()> {
 
-    // STEP 0 - calculate f (# of faulty nodes in pBFT consensus equation)
+    // STEP 0 - calculate f (# of faulty nodes in pbft consensus equation)
     // if N = 3f + 1 holds true, where N = nodes, there can be at most (N - 1) / 3 faulty nodes
-    let faulty = if leader { (( tools.registry.len() - 1 ) / 3).max(1) as u32 }
-        else { (( tools.registry.len() ) / 3).max(1) as u32 };
+    let faulty = (( tools.registry.len() - 1 ) / 3).max(1) as u32;
 
     // timers in tokio are seperate futures of their own when directly awaited on
     // so create a timer that gets recalculated instead of created and dropped over and over
@@ -310,28 +308,25 @@ pub async fn consensus_engine(
 
     let tx_request = ActorRequest::ConsensusRequest { transaction };
 
-    // if leader, send pre-prepare message. if peer, skip straight to step 2
-    if leader {
-        // STEP 1: broadcast the proposed transaction to each peer in the network registry
+    // STEP 1: broadcast the proposed transaction to each peer in the network registry
 
-        // create a transaction actor request to send to peers
-        let tx_bytes = serialize_into(serialization_pool, &tx_request);
-        let tx_payload = tx_bytes.freeze().clone(); 
+    // create a transaction actor request to send to peers
+    let tx_bytes = serialize_into(serialization_pool, &tx_request);
+    let tx_payload = tx_bytes.freeze().clone(); 
 
-        reset_timer(&mut sleep, 1500);
+    reset_timer(&mut sleep, 1500);
 
-        // loop through registry and send proposal to all peer nodes
-        for socket_frame in &mut tools.registry {
-            // set a timout - we don't want to hang sending to nonresponsive peers
-            tokio::select! {
-                _ = socket_frame.send(tx_payload.clone()) => {}
-                _ = &mut sleep => { println!("Peer hanged, skipping"); }
-            }
-
-            // the timer needs to be recalculated and reset each time
-            // looks inefficent but much faster than registering and dropping a future over and over again
-            reset_timer(&mut sleep, 1500);
+    // loop through registry and send proposal to all peer nodes
+    for socket_frame in &mut tools.registry {
+        // set a timout - we don't want to hang sending to nonresponsive peers
+        tokio::select! {
+            _ = socket_frame.send(tx_payload.clone()) => {}
+            _ = &mut sleep => { println!("Peer hanged, skipping"); }
         }
+
+        // the timer needs to be recalculated and reset each time
+        // looks inefficent but much faster than registering and dropping a future over and over again
+        reset_timer(&mut sleep, 1500);
     }
 
     // STEP 2: hash the key and value to validate the proposal, and
@@ -356,14 +351,6 @@ pub async fn consensus_engine(
 
     let vote_bytes = serialize_into(serialization_pool, &prepare_vote);
     let vote_payload = vote_bytes.freeze().clone();
-
-    // if it's a peer send the request to the leader first
-    if !leader {
-        let mut leader_framed 
-            = leader_socket.as_ref().unwrap().lock().await;
-
-        send_with_timeout(&mut leader_framed, vote_payload.clone(), &mut sleep).await;
-    }
 
     reset_timer(&mut sleep, 1500);
 
@@ -397,14 +384,6 @@ pub async fn consensus_engine(
 
     let vote_bytes = serialize_into(serialization_pool, &commit_vote);
     let vote_payload = vote_bytes.freeze().clone();
-
-    // if it's a peer send the request to the leader first
-    if !leader {
-        let mut leader_framed 
-            = leader_socket.as_ref().unwrap().lock().await;
-
-        send_with_timeout(&mut leader_framed, vote_payload.clone(), &mut sleep).await;
-    }
 
     // Broadcast commit message and wait again for commit quorum
     for socket_frame in &mut tools.registry {
