@@ -14,8 +14,8 @@ use bytes::{Bytes, BytesMut};
 
 use serde::{Serialize, Deserialize};
 
-use crate::protocol::infra_main::{ConsensusTools, ConsensusToolsStruct, RegistrationRequest, consensus_engine, reader_task};
-use crate::protocol::utils::utils::{connect_with_retry, io_err, make_write_framed, reset_timer, send_connection_packet, serialize_into};
+use crate::protocol::infra_main::{ConsensusTools, ConsensusToolsStruct, RegistrationRequest, reader_task};
+use crate::protocol::utils::utils::{connect_with_retry, io_err, make_write_framed, reset_timer, return_err, send_connection_packet, send_with_timeout, serialize_into, wait_for_quorum};
 use crate::protocol::{
     infra_main::{ActorRequest, ClientTransaction, Transaction},
     utils::utils::{deserialize_packet, make_framed, verify_transaction}
@@ -23,10 +23,11 @@ use crate::protocol::{
 
 
 use rand::rngs::OsRng;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 
-// We use non thread safe Rc because this is a single threaded runtime
-// and async-aware mutex to collaboarte with scheduling
+/// We use non thread safe Rc because this is a single threaded runtime
+/// and async-aware mutex to handle the "refcell async paradox" 
+/// (how it's unsafe to hold a refcell over an await in a single threaded localset)
 pub type LeaderSocket = Rc<Mutex<SocketFramed>>;
 
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
@@ -259,6 +260,7 @@ async fn start_server(
                             verify_transaction(client_tx.pubkey, &tx.unsigned_msg[..], client_tx.signed_tx).await?
                         }
 
+                        //
                         leader_socket.lock().await
                             .send(serialize_into(&mut serialize_pool, &request).freeze()).await?;
                         
@@ -305,8 +307,11 @@ async fn peer_consensus_actor(
                 // client/peer node request to commit a transaction
                 ActorRequest::ConsensusRequest { transaction } => {
                     // execute consensus
-                    match consensus_engine(transaction, &mut tools, false, &mut peer_rx, 
-                        &mut commit_sender, &mut serialize_pool, Some(leader_socket.clone()), &mut signing_key).await {
+
+                    // we hold the lock for the entire function because we don't want client processing tasks
+                    // to get scheduled during consensus. it's uncontended from other threads and a quick atomic toggle
+                    match peer_consensus_engine(transaction, &mut tools, &mut peer_rx, 
+                        &mut commit_sender, &mut serialize_pool, &mut *leader_socket.lock().await, &mut signing_key).await {
                         Ok(_) => { println!("Consensus has been reached"); },
                         Err(e) => { eprintln!("Consensus failed with error: {}", e); }
                     }
@@ -315,7 +320,7 @@ async fn peer_consensus_actor(
             }
         }
 
-        // TODO - syncrhonize the adding of a new peer to the network through epoch lengths
+        // TODO - synchronize the adding of a new peer to the network through epoch lengths
 
         // wait for join requests from fellow peers
         Some(request) = registration_rx.recv() => {
@@ -324,4 +329,118 @@ async fn peer_consensus_actor(
             tools.registry.push(socket_framed);
         }
     } }
+}
+
+/// @function CPU bound consensus engine function to be ran per consensus
+/// * @param transaction: Transaction to be committed to the network/chain
+/// * @param tools: Tools (registery, sequence counter, view number) for consensus
+/// * @param vote receiver: the recieving end of the channel all peers send their votes through
+/// * @param commit sender: the sending end of the channel to send the final transaction back to the state manager
+/// * @param leader socket (optional): An option representing the leader socket that only peers use 
+/// * @param signing key: the private key that the current node uses to sign their vote certs
+pub async fn peer_consensus_engine(
+    transaction: Transaction, 
+    tools: &mut ConsensusTools,
+    vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
+    commit_sender: &mut mpsc::Sender<Transaction>, 
+    serialization_pool: &mut BytesMut,
+    leader_socket: &mut SocketFramed,
+    signing_key: &mut SigningKey) -> io::Result<()> {
+
+    // STEP 0 - calculate f (# of faulty nodes in pbft consensus equation)
+    // if N = 3f + 1 holds true, where N = nodes, there can be at most (N - 1) / 3 faulty nodes
+    // (for peers omit the - 1 to account for leader node not being in registry)
+    let faulty =  (( tools.registry.len() ) / 3).max(1) as u32;
+
+    // timers in tokio are seperate futures of their own when directly awaited on
+    // so create a timer that gets recalculated instead of created and dropped over and over
+    let sleep = tokio::time::sleep(Duration::from_millis(1500));
+
+    tokio::pin!(sleep);
+
+    // if peer skip straight to step 2
+
+    // STEP 2: hash the key and value to validate the proposal, and
+    // wait for a quorum (2f + 1) of PREPARE votes from other peers
+
+    // given node verifying the transaction themselves, verify the *client* transaction to see if it is valid
+    verify_transaction(&transaction.client_key, &transaction.unsigned_msg, &transaction.signed_msg).await?;
+
+    // once the transaction has been verified craft the PREPARE vote
+    let signed_prepare_vote = signing_key.sign(b"PREPARE").to_bytes();
+
+    let prepare_vote = ActorRequest::PeerVote { 
+        vote_type: Bytes::from_static(b"PREPARE"), 
+        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote)
+    };
+
+    let vote_bytes = serialize_into(serialization_pool, &prepare_vote);
+    let vote_payload = vote_bytes.freeze().clone();
+
+    // if it's a peer send the request to the leader first
+    send_with_timeout(leader_socket, vote_payload.clone(), &mut sleep).await;
+
+    reset_timer(&mut sleep, 1500);
+
+    // loop through registry and send PREPARE vote to all peer nodes
+    for socket_frame in &mut tools.registry {
+        send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
+
+        reset_timer(&mut sleep, 1500);
+    }
+
+    // reset the quorum and timer for the COMMIT vote
+    let mut quorum_counter = 0; reset_timer(&mut sleep, 3000);
+    tokio::select! {
+        _ = wait_for_quorum(vote_reciever, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+
+        _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
+    }
+    
+    // clean up the counter and the voter queue in preparation for recieving the commmit votes
+    quorum_counter = 0; while let Ok(_) = vote_reciever.try_recv() { /* clear out any PREPARE votes */ }
+    reset_timer(&mut sleep, 1500);
+
+    // STEP 3: Once quorum for prepare has been reached, prepare a commit certificate
+    let signed_commit_vote = signing_key.sign(b"COMMIT").to_bytes();
+
+    let commit_vote = ActorRequest::PeerVote { 
+        vote_type: Bytes::from_static(b"COMMIT"), 
+        signed_msg: Bytes::copy_from_slice(&signed_commit_vote)
+    };
+
+    let vote_bytes = serialize_into(serialization_pool, &commit_vote);
+    let vote_payload = vote_bytes.freeze().clone();
+
+    send_with_timeout(leader_socket, vote_payload.clone(), &mut sleep).await;
+    
+    // Broadcast commit message and wait again for commit quorum
+    for socket_frame in &mut tools.registry {
+        // set a timout - we don't want to hang sending to nonresponsive peers
+        send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
+
+        // reset the deadline for the next loop
+        reset_timer(&mut sleep, 1500);
+    }
+
+    tokio::select! {
+        _ = wait_for_quorum(vote_reciever, &mut quorum_counter, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
+
+        _ = &mut sleep => 
+            { return return_err("Time limit exceeded, prepare verification failed"); }
+    }
+
+    // consensus reached, transaction verified - commit!
+    // if state transition fails (split brain) - fail fast and resync after restarting
+    if let Err(_) = commit_sender.send(transaction).await {
+        eprintln!("Could not commit state transition");
+        panic!("Node crashed due to state transition failure"); 
+    }
+
+    // Update the sequence counter for the next transaction
+    // (for peer verification of order and leader identity)
+    tools.sequence_counter += 1;
+
+    Ok(())
+
 }
