@@ -1,5 +1,5 @@
 [package]
-name = "fortress-research"
+name = "fortress-protocol"
 version = "0.1.0"
 edition = "2024"
 
@@ -18,4 +18,5 @@ sha2 = "0.11.0"
 rand = "0.8"
 ed25519-dalek = { version = "2.2.0", features = ["rand_core"] }
 local-channel = "0.1.5"
+local-sync = "0.1.1"
 gdt-cpus = "0.2606.1"
