@@ -62,7 +62,7 @@ pub async fn send_connection_packet<Writer>(
 
 /// @util waits for signed prepare votes and commit certs from reader task until pBFT quorum of 2f + 1
 pub async fn wait_for_quorum(
-    vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
+    vote_reciever: &mut mpsc::Receiver<ActorRequest>, sequence_counters: (u32, u32),
     quorum_counter: &mut u32, faulty: u32, stage: &'static [u8]) {
 
     // if F calculates to 1 we most likely don't have enough nodes to do a real quorum calculation
@@ -71,8 +71,14 @@ pub async fn wait_for_quorum(
     while let Some(value) = vote_reciever.recv().await {
         match value {
             ActorRequest::PeerVote { vote_type, signed_msg: _ } => {
-                if vote_type == Bytes::from_static(stage) { 
-                    *quorum_counter += 1; 
+
+                // first check if the vote is for the right stage
+                if vote_type == Bytes::from_static(stage)  { 
+
+                    // then check if the sequence counters match
+                    if sequence_counters.0 == sequence_counters.1 {
+                        *quorum_counter += 1; 
+                    }
                 } if *quorum_counter >= quorum { break; }
             }, _ => {}
         }
