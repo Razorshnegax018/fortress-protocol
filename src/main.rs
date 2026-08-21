@@ -26,7 +26,7 @@ fn create_bootnode() -> tokio::io::Result<()> {
 fn create_leader_node() -> tokio::io::Result<()> {
     // make the multi-threaded reader runtime
     let network_runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("receiver-worker-pool").enable_all().build()?;
+        .thread_name("leader-runtime").enable_all().build()?;
 
     // start the main server on the multithreaded runtime
     network_runtime.block_on(async move {
@@ -68,11 +68,6 @@ fn main() -> tokio::io::Result<()> {
 
     // Start the isolated bootnode thread
     let _bootnode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
-
-        // pin bootnode thread to core
-        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
-        if applied.effective() != Highest { eprintln!("Failed to pin leader to perf cluster"); }
-
         let _ = create_bootnode(); boot_tx.send("fin").unwrap();
 
         Ok(()) }); println!("Bootnode runtime started");
