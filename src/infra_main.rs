@@ -51,6 +51,11 @@ pub type ConsensusTools = ConsensusToolsStruct;
 /// @enum The main enum by which all methods - channel and peer through sockets - communicate with any consensus engine actor
 /// * @branch ConsensusReqeust: requesting the actor to start consensus
 ///     * @field transaction: The transaction to be commited to the blockchain
+/// ---
+/// * @branch PeerConsensusRequest: the same thing as consensus request, just for peer, 
+/// so that sending a request over the channel doesn't trigger double consensus
+///     * @field transaction: The transaction to be commited to the blockchain
+/// ---
 /// * @branch PeerVote: a vote (cert) from a peer to be sent over the network to a reader task
 ///     * @field vote type: the stage the peer is voting for (prepare, commit cert)
 ///     * @field signed_msg: the vote type name signed with the peer's private key 
@@ -58,6 +63,7 @@ pub type ConsensusTools = ConsensusToolsStruct;
 #[derive(Serialize, Deserialize)]
 pub enum ActorRequest {
     ConsensusRequest { transaction: Transaction }, 
+    PeerConsensusRequest { transaction: Transaction },
     PeerVote { vote_type: Bytes, signed_msg: Bytes }
 }
 
@@ -271,7 +277,9 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
 
                 // but if it's a client adding a new transaction, send directly to engine
                 ActorRequest::ConsensusRequest { transaction: _ } => 
-                    { io_err(peer_tx.send(request).await)?; },
+                    { io_err(peer_tx.send(request).await)?; }
+                    
+            _ => { eprintln!("Reader task got a bad enum variant") },
             } },
             Err(_) => { eprintln!("Deserialization failed"); 
                 return Err(io::Error::new(io::ErrorKind::InvalidData, "failed")) }
