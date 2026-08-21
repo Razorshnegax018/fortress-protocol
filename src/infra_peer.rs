@@ -1,17 +1,16 @@
 use core::panic;
 use std::collections::HashMap;
-use std::rc::Rc;
+use std::thread::JoinHandle;
 use std::time::Duration;
-use std::cell::{Cell, RefCell, RefMut};
 
+use gdt_cpus::ThreadPriority::Highest;
 use tokio::net::tcp::OwnedWriteHalf;
+use tokio::runtime::Handle;
 use tokio::sync::mpsc;
 use tokio::{io, net::{TcpListener, TcpStream}};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use futures::{SinkExt, StreamExt};
-
-use local_sync::semaphore::Semaphore;
 
 use bytes::{Bytes, BytesMut};
 
@@ -27,25 +26,9 @@ use crate::protocol::{
 use rand::rngs::OsRng;
 use ed25519_dalek::{Signer, SigningKey};
 
-/// We use non thread safe Rc because this is a single threaded runtime
-/// and a refcell despite the danger of the "refcell async paradox" 
-/// (how it's unsafe to hold a refcell over an await in a single threaded localset
-/// because task a could try borrow while it's already being borrowed by task b)
-/// because we have async aware non atomic semaphore acting as a permit system
-pub type LeaderSocket = Rc<RefCell<SocketFramed>>;
-
-/// The semaphore permit described in the aformentioned Rc<RefCell> leader socket discussion
-pub type LeaderPermit = Rc<Semaphore>;
-
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 
-thread_local! {
-    /// We need to keep the seq_counter as a static cell because the two tasks need access to it.
-    /// We use const static cell + thread local, because the only other option would be a global atomic
-    static SEQ_COUNTER: Cell<usize> = const { Cell::new(0) };
-}
-
-
+/// Zero copy transport format that contains a node's type, its address, and it's pubkey for ID
 #[derive(Serialize, Deserialize)]
 pub struct ConnectionPacket<'a> {
     #[serde(borrow, with = "serde_bytes")] pub node_type: &'a [u8], 
@@ -55,12 +38,12 @@ pub struct ConnectionPacket<'a> {
 
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 
-pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
+pub async fn discover_network() {
     // create the registry to be filled with peers alerady connected to the network
     let mut registry: Vec<SocketFramed> = Vec::with_capacity(12);
 
     // leader socket that may or may not exist
-    let mut leader_socket: Option<LeaderSocket> = None;
+    let mut leader_socket: Option<SocketFramed> = None;
 
     // grab the port from the cmdline
     // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
@@ -73,8 +56,6 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
     let mut csprng = OsRng;
     let keypair: SigningKey = SigningKey::generate(&mut csprng);
     let self_pubkey = keypair.verifying_key().to_bytes();
-
-    let reader_runtime = network_runtime.handle().clone();
 
     // create channel for sending consensus requests
     let (engine_tx, peer_rx) = mpsc::channel::<ActorRequest>(32);
@@ -124,13 +105,13 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
                             send_connection_packet("peer-pubkey", &address, 
                             Some(&self_pubkey), &mut write_framed, &mut serialize_pool).await;
 
-                            leader_socket = Some(Rc::new(RefCell::new(write_framed)));
+                            leader_socket = Some(write_framed);
 
                             // 2) clone the consensus engine sender to hand off to the reader task
                             let peer_tx = engine_tx.clone();
 
                             // 3) then, for each reader, spawn a new reader task
-                            reader_runtime.spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
+                            tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
                         } else {
                             // send a pubkey confirmation packet to peer
                             send_connection_packet("peer-pubkey", &address, 
@@ -143,7 +124,7 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
                             let peer_tx = engine_tx.clone();
 
                             // 3) then, for each reader, spawn a new reader task
-                            reader_runtime.spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
+                            tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
                         }
                     },
                     Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*address); }
@@ -154,16 +135,15 @@ pub async fn discover_network(network_runtime: tokio::runtime::Runtime) {
 
     if leader_socket.is_none() { panic!("No leader node found") }
 
-    if let Err(e) = start_server(registry, leader_socket.unwrap(), keypair, address, 
-        network_runtime, engine_tx, peer_rx, serialize_pool).await 
+    if let Err(e) = start_server(registry, leader_socket.unwrap(), 
+    keypair, address, engine_tx, peer_rx, serialize_pool).await 
             { eprintln!("Peer node server exited with Error: {}", e); } println!("Peer node server closed")
 }
 
 async fn start_server(
     registry: Vec<SocketFramed>, 
-    leader_socket: LeaderSocket, 
+    leader_socket: SocketFramed, 
     signing_key: SigningKey, address: String,
-    network_runtime: tokio::runtime::Runtime,
     engine_tx: mpsc::Sender<ActorRequest>,
     peer_rx: mpsc::Receiver<ActorRequest>,
     mut serialize_pool: BytesMut) -> io::Result<()> {
@@ -175,7 +155,7 @@ async fn start_server(
         let (commit_sender, mut tx_reciever) = mpsc::channel::<Transaction>(32);
 
         // Start the manager task that controls state and the transaction log
-        let _transaction_manager = tokio::task::spawn_local(async move {
+        let _transaction_manager = tokio::task::spawn(async move {
             let mut blockchain_state: HashMap<Bytes, Bytes> = HashMap::new();
             let mut transaction_log: Vec<Transaction> = Vec::with_capacity(1024);
 
@@ -185,10 +165,8 @@ async fn start_server(
             }
         });
 
-        let reader_runtime = network_runtime.handle().clone();
-
         // create channel for sending peer joining requests
-        let (registration_tx, registration_rx) = local_channel::mpsc::channel::<RegistrationRequest>();
+        let (registration_tx, registration_rx) = mpsc::channel::<RegistrationRequest>(32);
 
         // we need to spawn reader tasks for all the sockets the bootnode gave us
         // and populate the registry (to be used in tools) with all the writer sockets
@@ -198,13 +176,26 @@ async fn start_server(
             sequence_counter: 0, view_number: 0, registry, 
             address_list: Vec::with_capacity(10) };
 
-        // create leader permit semaphore to pass to actor
-        let leader_permit = Rc::new(Semaphore::new(1));
+        let handle = Handle::current();
 
         // spawn consensus engine task
-        let _consensus_task = tokio::task::spawn_local(
-            peer_consensus_actor(commit_sender, tools, peer_rx, 
-                leader_socket.clone(), registration_rx, signing_key, leader_permit.clone()));
+        let _consensus_task: JoinHandle<io::Result<()>> = std::thread::spawn(move || {
+            // pin the leader node thread to perf core
+            let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
+            if applied.effective() != Highest { eprintln!("Failed to pin peer consensus engine to perf cluster"); }
+
+            // start the task on the thread
+            handle.block_on( async move {
+                // create the localset, so the task doesn't go into the general queue
+                let local = tokio::task::LocalSet::new();
+
+                // run the actor on the localset 
+                local.spawn_local(peer_consensus_actor(commit_sender, tools, peer_rx, 
+                    leader_socket, registration_rx, signing_key)); 
+
+                // start the localset   
+                local.await; }); Ok(())
+        });
 
         // whenever a new connection is opened...
         // create a reusable timout timer
@@ -239,12 +230,12 @@ async fn start_server(
                     b"peer-pubkey" => {
                         // pass the read half and the request sender to a new reader task
                         let _peer_tx = engine_tx.clone();
-                        reader_runtime.spawn(reader_task(read_framed, _peer_tx, Box::from(connection_packet.payload))); 
+                        tokio::task::spawn(reader_task(read_framed, _peer_tx, Box::from(connection_packet.payload))); 
 
                         // send a registration request to the consensus enigne receiver to register the write half
                         let request = RegistrationRequest { socket: write_socket, addr };
 
-                        io_err(registration_tx.send(request))?;
+                        io_err(registration_tx.send(request).await)?;
                     },
 
                     // on client transaction request, verify and prepare for consensus
@@ -253,7 +244,8 @@ async fn start_server(
                         let client_tx: ClientTransaction = deserialize_packet::<ClientTransaction>(&connection_packet.payload)?;
 
                         // reuse the existing serialize pool to avoid per client request allocation
-                        serialize_pool.extend_from_slice(&client_tx.key); serialize_pool.extend_from_slice(&client_tx.value);
+                        serialize_pool.extend_from_slice(&client_tx.key);
+                        serialize_pool.extend_from_slice(&client_tx.value);
 
                         let unsigned_msg = serialize_pool.split();
 
@@ -262,31 +254,26 @@ async fn start_server(
                         // TODO - This literally defeats the purpose of zero copy. need to find a way to
                         // copy key, client key, and value all in one go, or send the counters individually
 
-                        // get the sequence counter
-                        let mut seq_counter: usize = 0; SEQ_COUNTER.with(|counter| { seq_counter = counter.get() });
+                        // CRITICAL - we store the sequence counter as '0' here because reading it on this thread
+                        // trigger a race condition, where the sequence counter get read right before it gets edited 
+                        //
 
                         // Step 2: create a client transaction request
-                        let request = ActorRequest::ConsensusRequest { transaction: Transaction {
-                            client_key: Bytes::copy_from_slice(client_tx.pubkey),
-                            seq_counter: seq_counter as u32, key: Bytes::copy_from_slice(client_tx.key),
-                            signed_msg: Bytes::copy_from_slice(client_tx.signed_tx), view_number: 0, 
+                        let request = ActorRequest::PeerConsensusRequest { transaction: Transaction {
+                            client_key: Bytes::copy_from_slice(client_tx.pubkey), view_number: 0, 
+                            key: Bytes::copy_from_slice(client_tx.key), seq_counter: 0, 
+                            signed_msg: Bytes::copy_from_slice(client_tx.signed_tx), 
                             value: Bytes::copy_from_slice(client_tx.value), unsigned_msg: unsigned_msg.freeze(),
                         }};
 
                         // Step 3: verify the transaction and send the request to the engine
-                        if let ActorRequest::ConsensusRequest { transaction: ref tx } = request {
+                        if let ActorRequest::PeerConsensusRequest { transaction: ref tx } = request {
                             // TODO: move into seperate function for better error handling
                             verify_transaction(client_tx.pubkey, &tx.unsigned_msg[..], client_tx.signed_tx).await?
                         }
 
-                        // acquire leader socket permit
-                        let _permit = io_err(leader_permit.acquire().await)?;
-
-                        // borrow the leader refcell and send them the transaction
-                        leader_socket.borrow_mut().send(serialize_into(&mut serialize_pool, &request).freeze()).await?;
-                        
-                        // do NOT send the request to the engine once it's verified
-                        // the reader task will automatically start consensus
+                        // send the request to the engine
+                        io_err(engine_tx.send(request).await)?;
                     },
 
                     _ => { eprintln!("Connection packet with unknown node type"); continue; }
@@ -298,6 +285,7 @@ async fn start_server(
     Ok(())
 }
 
+
 /// @function consensus actor: actor handler for the consensus engine hot loop
 ///  * @param `commit_sender`: Sender end of channel engine uses 
 ///    to send completed transactions back to state manager 
@@ -308,9 +296,8 @@ async fn start_server(
 ///  * @param `registration_rx`: receiver end of the channel the main runtime sends peer registration requestes through
 async fn peer_consensus_actor(
     mut commit_sender: mpsc::Sender<Transaction>, mut tools: ConsensusTools, 
-    mut peer_rx: mpsc::Receiver<ActorRequest>, leader_socket: LeaderSocket,
-    mut registration_rx: local_channel::mpsc::Receiver<RegistrationRequest>,
-    mut signing_key: SigningKey, leader_permit: LeaderPermit) {
+    mut peer_rx: mpsc::Receiver<ActorRequest>, mut leader_socket: SocketFramed,
+    mut registration_rx: mpsc::Receiver<RegistrationRequest>, mut signing_key: SigningKey) {
 
     let socket_codec = LengthDelimitedCodec::builder()
         .length_field_length(2).little_endian().new_codec();
@@ -328,19 +315,26 @@ async fn peer_consensus_actor(
                 ActorRequest::ConsensusRequest { transaction } => {
                     // execute consensus
 
-                    // acquire the leader permit. we hold the permit for the entire function because 
-                    // we don't want client processing tasks to get scheduled during consensus.
-                    let _permit = match leader_permit.acquire().await {
-                        Ok(_permit) => _permit,
-                        Err(_) => { eprintln!("Cannot safely access leader socket"); continue; },
-                    };
-
                     match peer_consensus_engine(transaction, &mut tools, &mut peer_rx, 
-                        &mut commit_sender, &mut serialize_pool, leader_socket.borrow_mut(), &mut signing_key).await {
+                        &mut commit_sender, &mut serialize_pool, &mut leader_socket, &mut signing_key).await {
                         Ok(_) => { println!("Consensus has been reached"); },
                         Err(e) => { eprintln!("Consensus failed with error: {}", e); }
                     }
                 },
+
+                    ActorRequest::PeerConsensusRequest { mut transaction } => {
+                        // first, place the correct sequence counter at the thread boundary
+                        transaction.seq_counter = tools.sequence_counter;
+
+                        // then, craft the actual consensus request (move the tx field, which moving a list of ptrs)
+                        let true_request = ActorRequest::ConsensusRequest { transaction };
+
+                        // route the transacton to the leader node
+                        if let Err(_) = leader_socket.send(serialize_into(
+                            &mut serialize_pool, &true_request).freeze()).await {
+                                eprintln!("Failed to send transaction to leader socket");
+                        }
+                    }
                 _ => eprintln!("Invalid message from peer")
             }
         }
@@ -369,7 +363,7 @@ pub async fn peer_consensus_engine(
     vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
     commit_sender: &mut mpsc::Sender<Transaction>, 
     serialization_pool: &mut BytesMut,
-    mut leader_socket: RefMut<'_, SocketFramed>,
+    leader_socket: &mut SocketFramed,
     signing_key: &mut SigningKey) -> io::Result<()> {
 
     // STEP 0 - calculate f (# of faulty nodes in pbft consensus equation)
@@ -403,7 +397,7 @@ pub async fn peer_consensus_engine(
     let vote_payload = vote_bytes.freeze().clone();
 
     // if it's a peer send the request to the leader first
-    send_with_timeout(&mut leader_socket, vote_payload.clone(), &mut sleep).await;
+    send_with_timeout(leader_socket, vote_payload.clone(), &mut sleep).await;
 
     reset_timer(&mut sleep, 1500);
 
@@ -417,10 +411,8 @@ pub async fn peer_consensus_engine(
     // reset the quorum and timer for the COMMIT vote
     let mut quorum_counter = 0; reset_timer(&mut sleep, 3000);
 
-    // get the sequence counter
-    let mut seq_counter: usize = 0; SEQ_COUNTER.with(|counter| { seq_counter = counter.get() });
-
-    let sequence_counters = (seq_counter as u32, transaction.seq_counter);
+    // get the sequence counters: (known counter, proposed counter)
+    let sequence_counters = (tools.sequence_counter, transaction.seq_counter);
 
     tokio::select! {
         _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
@@ -443,7 +435,7 @@ pub async fn peer_consensus_engine(
     let vote_bytes = serialize_into(serialization_pool, &commit_vote);
     let vote_payload = vote_bytes.freeze().clone();
 
-    send_with_timeout(&mut leader_socket, vote_payload.clone(), &mut sleep).await;
+    send_with_timeout(leader_socket, vote_payload.clone(), &mut sleep).await;
     
     // Broadcast commit message and wait again for commit quorum
     for socket_frame in &mut tools.registry {
@@ -472,7 +464,8 @@ pub async fn peer_consensus_engine(
     // (for peer verification of order and leader identity)
 
     // peer needs to use the static thread local cell
-    SEQ_COUNTER.with(|counter| counter.set(counter.get() + 1));
+    tools.sequence_counter += 1;
+    
 
     Ok(())
 
