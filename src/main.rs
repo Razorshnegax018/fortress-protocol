@@ -7,7 +7,6 @@ use crate::protocol::{bootnode, utils::utils::io_err};
 pub mod protocol;
 pub mod database;
 pub mod file_server;
-pub mod message_server;
 
 
 fn create_bootnode() -> tokio::io::Result<()> {
@@ -29,16 +28,9 @@ fn create_leader_node() -> tokio::io::Result<()> {
     let network_runtime = tokio::runtime::Builder::new_multi_thread()
         .thread_name("receiver-worker-pool").enable_all().build()?;
 
-    // make the single-threaded runtime for the consensus engine
-    let consensus_runtime = tokio::runtime::Builder
-        ::new_current_thread().enable_all().build()?;
-
-    // the localset to run all tasks on single thread
-    let local = tokio::task::LocalSet::new();
-    
-    // start the conesus engine runtime with the localset
-    local.block_on(&consensus_runtime, async move {
-        let _ = protocol::infra_main::start_server(network_runtime).await;
+    // start the main server on the multithreaded runtime
+    network_runtime.block_on(async move {
+        let _ = protocol::infra_main::start_server().await;
     });
 
     Ok(())
@@ -49,22 +41,20 @@ fn create_peer_node() -> tokio::io::Result<()> {
 
     // make the multi-threaded reader runtime
     let network_runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("receiver-worker-pool").enable_all().build()?;
+        .thread_name("peer-runtime").enable_all().build()?;
 
-    // make the single-threaded runtime for the consensus engine
-    let consensus_runtime = tokio::runtime::Builder
-        ::new_current_thread().enable_all().build()?;
-
-    // the localset to run all tasks on single thread
-    let local = tokio::task::LocalSet::new();
-
-    // start the conesus engine runtime with the localset
-    local.block_on(&consensus_runtime, async move {
-        let _ = protocol::infra_peer::discover_network(network_runtime).await;
+    // start the main server on the multithreaded runtime
+    network_runtime.block_on(async move {
+        let _ = protocol::infra_peer::discover_network().await;
     });
     Ok(())
 }
 
+//////////////////////////////////////////// TODO ////////////////////////////////////////////
+/// 
+/// 
+/// SPLIT EACH OF THE THREE NODES INTO THEIR OWN FILES
+/// THE AMOUNT OF SLEEPS IN THIS CODE IS RIDICULOUS 
 fn main() -> tokio::io::Result<()> {
     let (lead_tx, lead_rx) = unbounded::<&'static str>();
     let (boot_tx, boot_rx) = unbounded::<&'static str>();
@@ -72,11 +62,6 @@ fn main() -> tokio::io::Result<()> {
 
     // Start the isolated leader node thread (which manages its own I/O pool)
     let _leader_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || { 
-
-        // pin the leader node thread to core
-        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
-        if applied.effective() != Highest { eprintln!("Failed to pin leader to perf cluster"); }
-
         let _ = create_leader_node(); lead_tx.send("fin").unwrap();
 
         Ok(()) }); println!("Leader node thread created");
@@ -94,10 +79,7 @@ fn main() -> tokio::io::Result<()> {
 
     // create the peernode main multithreaded runtime
     let _peernode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
-        // pin a peer node node thread to core
-        let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
-        if applied.effective() != Highest { eprintln!("Failed to pin peer to perf cluster"); }
-
+        
         let _ = create_peer_node(); peer_tx.send("fin").unwrap();
 
         Ok(()) }); 
