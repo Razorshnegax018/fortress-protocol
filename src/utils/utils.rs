@@ -5,9 +5,11 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures::SinkExt;
 use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpStream, tcp::OwnedWriteHalf}, sync::mpsc, time::{Instant, Sleep}};
-use tokio_util::codec::{Framed, LengthDelimitedCodec};
+use tokio_util::{codec::{Framed, LengthDelimitedCodec}};
 
 use crate::protocol::{infra_main::ActorRequest, infra_peer::ConnectionPacket};
+
+use heapless::index_set::FnvIndexSet;
 
 /// @util cryptographically verifies a given transacton
 /// * @params pubkey, unsigned msg, signed msg - all required for signing 
@@ -68,16 +70,22 @@ pub async fn wait_for_quorum(
     // if F calculates to 1 we most likely don't have enough nodes to do a real quorum calculation
     let quorum = if faulty != 1 { 2 * faulty + 1 } else { 1 };
 
+    // create a hashset to guard against vote deduping
+    let mut dedup_guard: FnvIndexSet<[u8; 32], 16> = FnvIndexSet::new();
+
     while let Some(value) = vote_reciever.recv().await {
         match value {
-            ActorRequest::PeerVote { vote_type, signed_msg: _ } => {
+            ActorRequest::PeerVote { vote_type, signed_msg: _, pubkey } => {
 
                 // first check if the vote is for the right stage
-                if vote_type == Bytes::from_static(stage)  { 
+                if vote_type == Bytes::from_static(stage)  {
 
-                    // then check if the sequence counters match
+                    // TODO: then, check if the vote hash already been counted
+                    if dedup_guard.contains(&pubkey) { eprintln!("Dedup attempt detected"); continue; }
+                    
+                    // finally, check if the sequence counters match
                     if sequence_counters.0 == sequence_counters.1 {
-                        *quorum_counter += 1; 
+                        *quorum_counter += 1; dedup_guard.insert(pubkey).unwrap();
                     }
                 } if *quorum_counter >= quorum { break; }
             }, _ => {}
