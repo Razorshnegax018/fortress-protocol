@@ -36,6 +36,9 @@ pub struct ConnectionPacket<'a> {
     #[serde(borrow, with = "serde_bytes")] pub payload: &'a [u8]
 }
 
+#[derive(Deserialize)]
+pub struct RefusalPacket<'a> { #[serde(borrow)] pub msg: &'a [u8] }
+
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 
 pub async fn discover_network() {
@@ -77,59 +80,57 @@ pub async fn discover_network() {
         // if deserialization of the connection packet from the bootnode fails,
         // log the error and skip the packet
         if let Some(Ok(value)) = socket_framed.next().await {
-            let Ok(list) = deserialize_packet::<Vec<ConnectionPacket>>(&value) else { 
-                println!("{:?}", &value[..]);
+            if let Ok(list) = deserialize_packet::<Vec<ConnectionPacket>>(&value) {
+                for packet in list {
+                    // connect to peer 
+                    match TcpStream::connect(std::str::from_utf8(&packet.address).unwrap()).await {
 
-                // TODO - refactor to not panic
-                panic!("Bootnode sent bad packet");
-            };
+                        // we need to spawn reader tasks for each of the sockets the bootnode gave us
+                        Ok(stream) => { 
+                            // 1) split the sockets into read and write and create frameds for them
+                            let (reader, writer) = stream.into_split();
 
-            for packet in list {
-                // connect to peer 
-                match TcpStream::connect(std::str::from_utf8(&packet.address).unwrap()).await {
+                            let read_framed = make_framed(reader, 512);
+                            let mut write_framed = make_write_framed(writer, 512);
 
-                    // we need to spawn reader tasks for each of the sockets the bootnode gave us
-                    Ok(stream) => { 
-                        // 1) split the sockets into read and write and create frameds for them
-                        let (reader, writer) = stream.into_split();
+                            let peer_pubkey = packet.payload;
 
-                        let read_framed = make_framed(reader, 512);
-                        let mut write_framed = make_write_framed(writer, 512);
+                            if packet.node_type == b"leader" { 
+                                println!("Peernode connected to leader socket"); 
+                            
+                                // send a pubkey confirmation packet to leader
+                                send_connection_packet("peer-pubkey", &address, 
+                                Some(&self_pubkey), &mut write_framed, &mut serialize_pool).await;
 
-                        let peer_pubkey = packet.payload;
+                                leader_socket = Some(write_framed);
 
-                        if packet.node_type == b"leader" { 
-                            println!("Peernode connected to leader socket"); 
-                        
-                            // send a pubkey confirmation packet to leader
-                            send_connection_packet("peer-pubkey", &address, 
-                            Some(&self_pubkey), &mut write_framed, &mut serialize_pool).await;
+                                // 2) clone the consensus engine sender to hand off to the reader task
+                                let peer_tx = engine_tx.clone();
 
-                            leader_socket = Some(write_framed);
+                                // 3) then, for each reader, spawn a new reader task
+                                tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
+                            } else {
+                                // send a pubkey confirmation packet to peer
+                                send_connection_packet("peer-pubkey", &address, 
+                                Some(&self_pubkey), &mut write_framed, &mut serialize_pool).await;
 
-                            // 2) clone the consensus engine sender to hand off to the reader task
-                            let peer_tx = engine_tx.clone();
+                                // add the writer into the registry
+                                registry.push(write_framed);
 
-                            // 3) then, for each reader, spawn a new reader task
-                            tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
-                        } else {
-                            // send a pubkey confirmation packet to peer
-                            send_connection_packet("peer-pubkey", &address, 
-                            Some(&self_pubkey), &mut write_framed, &mut serialize_pool).await;
+                                // 2) clone the consensus engine sender to hand off to the reader task
+                                let peer_tx = engine_tx.clone();
 
-                            // add the writer into the registry
-                            registry.push(write_framed);
-
-                            // 2) clone the consensus engine sender to hand off to the reader task
-                            let peer_tx = engine_tx.clone();
-
-                            // 3) then, for each reader, spawn a new reader task
-                            tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
-                        }
-                    },
-                    Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*address); }
+                                // 3) then, for each reader, spawn a new reader task
+                                tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
+                            }
+                        },
+                        Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*address); }
+                    }
                 }
-            }
+            } else if let Ok(refusal_packet) = deserialize_packet::<RefusalPacket>(&value) {
+                let message = std::str::from_utf8(&refusal_packet.msg).unwrap();
+                eprintln!("Bootnode refused to send address list with given message: {}", message);
+            } else { panic!("Cannot connect to the network: deserialization of peer list from bootnode failed"); }
         }
     } 
 
@@ -390,7 +391,8 @@ pub async fn peer_consensus_engine(
 
     let prepare_vote = ActorRequest::PeerVote { 
         vote_type: Bytes::from_static(b"PREPARE"), 
-        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote)
+        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote),
+        pubkey: signing_key.verifying_key().to_bytes()
     };
 
     let vote_bytes = serialize_into(serialization_pool, &prepare_vote);
@@ -415,7 +417,8 @@ pub async fn peer_consensus_engine(
     let sequence_counters = (tools.sequence_counter, transaction.seq_counter);
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+                faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
@@ -429,7 +432,8 @@ pub async fn peer_consensus_engine(
 
     let commit_vote = ActorRequest::PeerVote { 
         vote_type: Bytes::from_static(b"COMMIT"), 
-        signed_msg: Bytes::copy_from_slice(&signed_commit_vote)
+        signed_msg: Bytes::copy_from_slice(&signed_commit_vote),
+        pubkey: signing_key.verifying_key().to_bytes(),
     };
 
     let vote_bytes = serialize_into(serialization_pool, &commit_vote);
@@ -447,7 +451,8 @@ pub async fn peer_consensus_engine(
     }
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+                faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
 
         _ = &mut sleep => 
             { return return_err("Time limit exceeded, prepare verification failed"); }
