@@ -1,26 +1,35 @@
-use std::{net::IpAddr, rc::Rc, sync::atomic::{AtomicBool, Ordering}, time::Duration};
+use std::{net::IpAddr, rc::Rc, time::Duration};
 
 use serde::Serialize;
-use tokio::{net::{TcpListener, TcpStream}, sync::{Mutex, oneshot}, time::Instant};
+use tokio::{net::{TcpListener, TcpStream}, sync::{Mutex, oneshot}};
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use bytes::{BufMut, Bytes, BytesMut};
 
 use futures::{SinkExt, StreamExt};
 
-use crate::protocol::{infra_peer::ConnectionPacket,
-	utils::utils::{deserialize_packet, make_framed}};
+use std::cell::Cell;
+
+use crate::protocol::{infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
 
 pub static BOOTNODE_ADDRESS: &'static str = "127.0.0.1:1100";
 
-static UPDATED_LIST: AtomicBool = AtomicBool::new(false);
+// we use a thread local global static because we don't need atomics
+thread_local! {
+	static UPDATED_LIST: Cell<bool> = const { Cell::new(false) }
+}
 
 #[derive(Serialize)]
 struct StoragePacket { node_type: &'static [u8], address: Bytes, payload: Bytes }
 
+#[derive(Serialize)]
+struct RefuseConnection { msg: &'static [u8] }
+
 /// The list with all the peer addresses, stored as storage packets. 
 /// They need to stored as unserialized Storage packets because 
 /// bincode cannot mass-deserialize something that was serialized piece by piece
+/// Rc<Mutex> is used in a singlethreaded context because of the "RefCell" paradox - 
+/// (Task A borrows refcell, task b gets schedulded while task A holds it, singlethreaded primitive panics)
 type AddressList = Rc<Mutex<Vec<StoragePacket>>>;
 
 pub async fn start_bootnode() {
@@ -69,7 +78,7 @@ pub async fn start_bootnode() {
 			}
 
 			// updated list - toggle updated list flag
-			UPDATED_LIST.store(true, Ordering::Release);
+			UPDATED_LIST.with(|toggle| toggle.set(true))
 		}
 
 		// DEBUGGING 
@@ -97,8 +106,7 @@ pub async fn start_bootnode() {
 		while let Ok((socket, addr)) = listener.accept().await {
 			println!("FROM BOOTNODE - New node addr {} joined", addr.to_string());
 
-			let deadline = Instant::now() + Duration::from_millis(500);
-			sleep.as_mut().reset(deadline.into());
+			reset_timer(&mut sleep, 750);
 
 			// create a framed for the connected machine - leader or peer
 			// TODO - dynamically split and rebuild to change size depending of if it's leader or peer
@@ -125,32 +133,43 @@ pub async fn start_bootnode() {
 							let _ = sender.send(socket_framed); leader_tx = None;
 						} else { eprintln!("Leader socket already connected"); continue; }
 
-						// push the connection bytes into the list
+						// push the leader storage packet into the list
 						let storage_packet = StoragePacket {
 							node_type: b"leader", address: Bytes::copy_from_slice(connected_packet.address),
 							payload: Bytes::copy_from_slice(connected_packet.payload) };
 
 						list.push(storage_packet); println!("Leader socket connected and verified");
 
-						println!("List len after pushing leader packet: {}", list.len());
-
 						// updated list - toggle updated list flag
-						UPDATED_LIST.store(true, Ordering::Release);
+						UPDATED_LIST.with(|toggle| toggle.set(true))
 					}, 
 
 					// if the connection request is from a peer,
 					b"peer-pubkey" => {
-						// if the registry has been updated, rebuild the payload
-						if UPDATED_LIST.load(Ordering::Acquire) {
-							// clear out the old payload/address list and reserve enough space in it
-							payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
+						// first, check to see if there's space for new validators
+						if list.len() >= 16 {
+							// if there's not, craft a "connection refused" packet
+							bincode::serialize_into((&mut payload).writer(), &RefuseConnection {
+								msg: b"Validators Full" }).unwrap();
+							
+							// send it to connected peer and continue on with loop
+							if let Err(_) = socket_framed.send(payload.split_off(payload.len()).freeze()).await {
+								eprintln!("Failed to send response to connecting peer node"); } continue;
+						}
 
-							// serialize the address list into the payload
-							bincode::serialize_into((&mut payload).writer(), list).unwrap();
-						} // if not, skip rebuild send the cached payload
+						// if the registry has been updated, rebuild the payload
+						UPDATED_LIST.with(|updated| { if updated.get() {
+								// clear out the old payload/address list and reserve enough space in it
+								payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
+
+								// serialize the address list into the payload
+								bincode::serialize_into((&mut payload).writer(), list).unwrap();
+							} // if not, skip rebuild send the cached payload
+						});
 						
 						// send the full address list to the client
-						let _ = socket_framed.send(payload.clone().freeze()).await;
+						if let Err(_) = socket_framed.send(payload.clone().freeze()).await {
+							eprintln!("Failed to send response to connecting peer node"); continue; } 
 
 						println!("List sent to addr");
 					}, _ => { eprintln!("Bootnode received bad packet"); continue; }
