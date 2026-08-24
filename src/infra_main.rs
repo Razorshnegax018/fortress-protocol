@@ -64,7 +64,7 @@ pub type ConsensusTools = ConsensusToolsStruct;
 pub enum ActorRequest {
     ConsensusRequest { transaction: Transaction }, 
     PeerConsensusRequest { transaction: Transaction },
-    PeerVote { vote_type: Bytes, signed_msg: Bytes }
+    PeerVote { vote_type: Bytes, signed_msg: Bytes, pubkey: [u8; 32] }
 }
 
 pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: std::net::SocketAddr }
@@ -259,7 +259,7 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
             Ok(request) => { match request {
 
                 // If it's a vote or cert from a peer, verify it before sending to quorum counter
-                ActorRequest::PeerVote { ref vote_type, ref signed_msg } => {
+                ActorRequest::PeerVote { ref vote_type, ref signed_msg, pubkey: _ } => {
                     // Step 1 - create the verifyng key from the pubkey bytes
                     let key_bytes: [u8; 32] = io_err(pubkey[..].try_into())?;
                     let verifying_key = io_err(VerifyingKey::from_bytes(&key_bytes))?;
@@ -355,7 +355,8 @@ pub async fn consensus_engine(
 
     let prepare_vote = ActorRequest::PeerVote { 
         vote_type: Bytes::from_static(b"PREPARE"), 
-        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote)
+        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote),
+        pubkey: signing_key.verifying_key().to_bytes()
     };
 
     let vote_bytes = serialize_into(serialization_pool, &prepare_vote);
@@ -375,7 +376,8 @@ pub async fn consensus_engine(
     let sequence_counters = (tools.sequence_counter, seq_counter);
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+                faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
@@ -390,7 +392,8 @@ pub async fn consensus_engine(
 
     let commit_vote = ActorRequest::PeerVote { 
         vote_type: Bytes::from_static(b"COMMIT"), 
-        signed_msg: Bytes::copy_from_slice(&signed_commit_vote)
+        signed_msg: Bytes::copy_from_slice(&signed_commit_vote),
+        pubkey: signing_key.verifying_key().to_bytes(),
     };
 
     let vote_bytes = serialize_into(serialization_pool, &commit_vote);
@@ -406,7 +409,8 @@ pub async fn consensus_engine(
     }
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
+        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+                faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
 
         _ = &mut sleep => 
             { return return_err("Time limit exceeded, prepare verification failed"); }
