@@ -27,7 +27,8 @@ pub struct ConnectionPacket<'a> {
 #[derive(Serialize, Deserialize)]
 pub struct ClientTransaction<'a> {
     #[serde(borrow)] pub key: &'a [u8], #[serde(borrow)] pub value: &'a [u8], 
-    #[serde(borrow)] pub pubkey: &'a [u8], #[serde(borrow)] pub signed_tx: &'a [u8]
+    #[serde(borrow)] pub pubkey: &'a [u8], #[serde(borrow)] pub unsigned_tx: &'a [u8],
+    #[serde(borrow)] pub signed_tx: &'a [u8]
 }
 
 // copy of serialize_into function from main crate
@@ -54,8 +55,9 @@ async fn main() -> std::io::Result<()> {
     // sign the message
     let signature = keypair.sign(&unsigned_msg).to_bytes();
 
-    let client_tx = ClientTransaction { 
-        key, value, pubkey: &pubkey_bytes, signed_tx: &signature };
+    let client_tx = ClientTransaction {
+        unsigned_tx: &unsigned_msg, signed_tx: &signature,
+        key, value, pubkey: &pubkey_bytes };
 
     let mut pool = BytesMut::with_capacity(1024);
     let client_tx_bytes = serialize_into(&mut pool, &client_tx).freeze();
