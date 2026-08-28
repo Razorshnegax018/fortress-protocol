@@ -19,7 +19,7 @@ use serde::{Serialize, Deserialize};
 use crate::protocol::infra_main::{ConsensusTools, ConsensusToolsStruct, RegistrationRequest, reader_task};
 use crate::protocol::utils::utils::{connect_with_retry, io_err, make_write_framed, reset_timer, return_err, send_connection_packet, send_with_timeout, serialize_into, wait_for_quorum};
 use crate::protocol::{
-    infra_main::{ActorRequest, ClientTransaction, Transaction},
+    infra_main::{ActorRequest, Transaction},
     utils::utils::{deserialize_packet, make_framed, verify_transaction}
 };
 
@@ -137,7 +137,7 @@ pub async fn discover_network() {
     if leader_socket.is_none() { panic!("No leader node found") }
 
     if let Err(e) = start_server(registry, leader_socket.unwrap(), 
-    keypair, address, engine_tx, peer_rx, serialize_pool).await 
+    keypair, address, engine_tx, peer_rx).await 
             { eprintln!("Peer node server exited with Error: {}", e); } println!("Peer node server closed")
 }
 
@@ -146,10 +146,7 @@ async fn start_server(
     leader_socket: SocketFramed, 
     signing_key: SigningKey, address: String,
     engine_tx: mpsc::Sender<ActorRequest>,
-    peer_rx: mpsc::Receiver<ActorRequest>,
-    mut serialize_pool: BytesMut) -> io::Result<()> {
-
-    // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
+    peer_rx: mpsc::Receiver<ActorRequest>) -> io::Result<()> {
 
     if let Ok(listener) = TcpListener::bind(address).await {
         // create the manager sender and reciever queue ends
@@ -241,36 +238,34 @@ async fn start_server(
 
                     // on client transaction request, verify and prepare for consensus
                     b"client-transaction" => {
-                        // step 1: verify the client transaction
-                        let client_tx: ClientTransaction = deserialize_packet::<ClientTransaction>(&connection_packet.payload)?;
+                        // Transaction types are Bytes. ClientTransaction sends &'a [u8]. Not the same type of ptr
+                        // so we need to first copy the transaction *once* into a new buffer to stay permanent/reference...
+                        let mut client_tx: Bytes = Bytes::copy_from_slice(connection_packet.payload);
 
-                        // reuse the existing serialize pool to avoid per client request allocation
-                        serialize_pool.extend_from_slice(&client_tx.key);
-                        serialize_pool.extend_from_slice(&client_tx.value);
+                        let slice_out = |buffer: &mut Bytes| -> Bytes {
+                            let size = usize::from_le_bytes(buffer.split_to(8)[..8]
+                                .try_into().unwrap()); return buffer.split_to(size);
+                        };
 
-                        let unsigned_msg = serialize_pool.split();
-
-                        // craft the full transaction
-
-                        // TODO - This literally defeats the purpose of zero copy. need to find a way to
-                        // copy key, client key, and value all in one go, or send the counters individually
+                        // ...then go in order and slice out/"deserialize" each of the fields one by one
+                        let key = slice_out(&mut client_tx);
+                        let value = slice_out(&mut client_tx);
+                        let client_key = slice_out(&mut client_tx);
+                        let unsigned_msg = slice_out(&mut client_tx);
+                        let signed_msg = slice_out(&mut client_tx);
 
                         // CRITICAL - we store the sequence counter as '0' here because reading it on this thread
-                        // trigger a race condition, where the sequence counter get read right before it gets edited 
-                        //
+                        // trigger a race condition, where the sequence counter can get read right before it gets edited in consensus
 
-                        // Step 2: create a client transaction request
+                        // finally, craft the full tx from each of the fields
                         let request = ActorRequest::PeerConsensusRequest { transaction: Transaction {
-                            client_key: Bytes::copy_from_slice(client_tx.pubkey), view_number: 0, 
-                            key: Bytes::copy_from_slice(client_tx.key), seq_counter: 0, 
-                            signed_msg: Bytes::copy_from_slice(client_tx.signed_tx), 
-                            value: Bytes::copy_from_slice(client_tx.value), unsigned_msg: unsigned_msg.freeze(),
+                            key, value, client_key, signed_msg, unsigned_msg, seq_counter: 0, view_number: 0
                         }};
 
                         // Step 3: verify the transaction and send the request to the engine
                         if let ActorRequest::PeerConsensusRequest { transaction: ref tx } = request {
                             // TODO: move into seperate function for better error handling
-                            verify_transaction(client_tx.pubkey, &tx.unsigned_msg[..], client_tx.signed_tx).await?
+                            verify_transaction(&tx.client_key, &tx.unsigned_msg[..], &tx.signed_msg).await?
                         }
 
                         // send the request to the engine
