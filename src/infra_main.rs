@@ -34,7 +34,8 @@ pub struct Transaction {
 #[derive(Serialize, Deserialize)]
 pub struct ClientTransaction<'a> {
     #[serde(borrow)] pub key: &'a [u8], #[serde(borrow)] pub value: &'a [u8], 
-    #[serde(borrow)] pub pubkey: &'a [u8], #[serde(borrow)] pub signed_tx: &'a [u8]
+    #[serde(borrow)] pub pubkey: &'a [u8], #[serde(borrow)] pub unsigned_tx: &'a [u8],
+    #[serde(borrow)] pub signed_tx: &'a [u8]
 }
 
 /** Struct that packages required tools for consensus 
