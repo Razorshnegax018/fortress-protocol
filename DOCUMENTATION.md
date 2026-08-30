@@ -242,3 +242,13 @@ This is unfortunately retroactive documentation that I started after the project
 	- Alright this is gotta be my last entry for now. Project retrospective, am I proud? Of course when looking at the code, it's recently built and a result of "genuis architecture", but *no* when looking at the doc. I was performative, cringe, and ultimately wrong over and over again in this documentation process because being performative and self rightous about something you don't understand is hyper cringe.
 
 	- All in all I learned a lot through this project. It was a good timesink during summer and I hope it sharpened my low level skills
+
+- August 29th
+	- I have an idea on dynamic nodes joining and getting dropped. 
+		- So the original pbft paper doesn't specify how validator nodes should join and leave, because it assumes a static, known list of validators. Modern implementations either have an on-chain vote to allow new validators to join or kick them out, or run on a PoS model where validator voting power is continuously changing based on staked tokens
+
+		- I'm not doing PoS. That would require me to put in an actual token system. I'm thinking about voting instead - not nodes broadcasting their list of validators, no, but nodes broadcasting a validator pubkey/id, and the action they want to take (add/drop). 
+
+		- I was thinking they could verify signatures then do a simple ping test. But 1) ping test, + how many new validators do each of our nodes want to add? all unbounded latency, and 2) more importantly, sybil resistance? hello? how do we stop nodes from forming a cartel and just spamming their friends in a vote? How do we stop nodes from just voting off all their enemies?
+
+		- No I haven't figured out a solution to this yet
