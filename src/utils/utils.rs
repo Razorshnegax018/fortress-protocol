@@ -87,7 +87,9 @@ pub async fn wait_for_quorum(
                     if sequence_counters.0 == sequence_counters.1 {
                         *quorum_counter += 1; dedup_guard.insert(pubkey).unwrap();
                     }
-                } if *quorum_counter >= quorum { break; }
+
+                    if *quorum_counter >= quorum { break; }
+                } 
             }, _ => {}
         }
     }
