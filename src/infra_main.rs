@@ -1,7 +1,7 @@
 use std::{collections::HashMap, io::self, thread::JoinHandle, time::Duration};
 
 use bytes::{Bytes, BytesMut};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
 
 use futures::{SinkExt, StreamExt};
@@ -12,7 +12,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    infra_peer::ConnectionPacket, utils::utils::{connect_with_retry, deserialize_packet, io_err, make_framed, reset_timer, return_err, send_connection_packet, send_with_timeout, serialize_into, verify_transaction, wait_for_quorum},
+    infra_peer::ConnectionPacket, utils::utils::*,
 };
 
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
@@ -315,6 +315,7 @@ pub async fn consensus_engine(
 
     tokio::pin!(sleep);
 
+    // sequence counter FROM THE GIVEN TRANSACTION - UNVERIFIED
     let seq_counter = transaction.seq_counter;
     let tx_request = ActorRequest::ConsensusRequest { transaction };
 
@@ -346,35 +347,33 @@ pub async fn consensus_engine(
     // CRITICAL - The leader needs to verify the transaction *after* it sends the pre-prepare vote
     // so that it doesn't just "verify" and decide a tx isn't valid and not propagate it (byzantine leader)
 
+    // reset the quorum and timer for the PREPARE vote
+    let mut quorum_counter = 0; let sequence_counters = (tools.sequence_counter, seq_counter);
+
+    // verify the transaction - if valid, add this node's count to the quorum
+    // if not, don't, but still continue with consensus
     if let ActorRequest::ConsensusRequest { transaction: ref tx } = tx_request {
         // verify the *client* transaction to see if it is valid
-        verify_transaction(&tx.client_key, &tx.unsigned_msg, &tx.signed_msg).await?;
-    }
+        match verify_transaction(&tx.client_key, &tx.unsigned_msg, &tx.signed_msg).await {
+            Ok(()) => {
+                // add self to quorum counter 
+                quorum_counter += 1; 
 
-    // once the transaction has been verified craft the PREPARE vote
-    let signed_prepare_vote = signing_key.sign(b"PREPARE").to_bytes();
+                // once the transaction has been verified craft the PREPARE vote
+                let vote_payload = create_vote("PREPARE", &signing_key, serialization_pool);
 
-    let prepare_vote = ActorRequest::PeerVote { 
-        vote_type: Bytes::from_static(b"PREPARE"), 
-        signed_msg: Bytes::copy_from_slice(&signed_prepare_vote),
-        pubkey: signing_key.verifying_key().to_bytes()
-    };
+                reset_timer(&mut sleep, 1500);
 
-    let vote_bytes = serialize_into(serialization_pool, &prepare_vote);
-    let vote_payload = vote_bytes.freeze().clone();
+                // loop through registry and send PREPARE vote to all peer nodes
+                for socket_frame in &mut tools.registry {
+                    send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
 
-    reset_timer(&mut sleep, 1500);
-
-    // loop through registry and send PREPARE vote to all peer nodes
-    for socket_frame in &mut tools.registry {
-        send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
-
-        reset_timer(&mut sleep, 1500);
-    }
-
-    // reset the quorum and timer for the COMMIT vote
-    let mut quorum_counter = 0; reset_timer(&mut sleep, 3000);
-    let sequence_counters = (tools.sequence_counter, seq_counter);
+                    reset_timer(&mut sleep, 1500);
+                }
+            },
+            Err(_) => { eprintln!("Transaction verification failed"); }
+        }
+    } reset_timer(&mut sleep, 3000);
 
     tokio::select! {
         _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
@@ -384,21 +383,12 @@ pub async fn consensus_engine(
     }
     
 
-    // clean up the counter and the voter queue in preparation for recieving the commmit votes
-    quorum_counter = 0; while let Ok(_) = vote_reciever.try_recv() { /* clear out any PREPARE votes */ }
+    // reset the quorum and timer for the COMMIT vote
+    quorum_counter = 1; while let Ok(_) = vote_reciever.try_recv() { /* clear out any PREPARE votes */ }
     reset_timer(&mut sleep, 1500);
 
     // STEP 3: Once quorum for prepare has been reached, prepare a commit certificate
-    let signed_commit_vote = signing_key.sign(b"COMMIT").to_bytes();
-
-    let commit_vote = ActorRequest::PeerVote { 
-        vote_type: Bytes::from_static(b"COMMIT"), 
-        signed_msg: Bytes::copy_from_slice(&signed_commit_vote),
-        pubkey: signing_key.verifying_key().to_bytes(),
-    };
-
-    let vote_bytes = serialize_into(serialization_pool, &commit_vote);
-    let vote_payload = vote_bytes.freeze().clone();
+    let vote_payload = create_vote("COMMIT", &signing_key, serialization_pool);
 
     // Broadcast commit message and wait again for commit quorum
     for socket_frame in &mut tools.registry {
