@@ -1,5 +1,5 @@
 use std::{collections::HashMap, io::self, thread::JoinHandle, time::Duration};
-
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use bytes::{Bytes, BytesMut};
 use ed25519_dalek::{Signature, SigningKey, Verifier, VerifyingKey};
 use rand::rngs::OsRng;
@@ -18,7 +18,7 @@ use crate::protocol::{
 type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 type ReadFramed = Framed<OwnedReadHalf, LengthDelimitedCodec>;
 
-type PeerRegistry = Vec<SocketFramed>;
+type PeerRegistry = [Option<SocketFramed>; 16];
 
 static ADDRESS: &str = "127.0.0.1:8070";
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
@@ -39,18 +39,67 @@ pub struct ClientTransaction<'a> {
 }
 
 /** Struct that packages required tools for consensus 
- (view number, sequence counter, registry) into one struct
- that can all be unlocked and accessed with a single mutex unlock
-*/
+ (view number, sequence counter, registry) into single struct */
 pub struct ConsensusToolsStruct {
     pub sequence_counter: u32, pub view_number: u32, pub registry: PeerRegistry,
-    pub address_list: Vec<std::net::SocketAddr>
+    pub address_list: [SocketAddr; 16], pub ids: [u8; 16], pub len: usize, pub next_id: usize
+}
+
+// @impl methods to handle adding, deleting, and looking up sockets
+impl ConsensusToolsStruct {
+    #[inline]
+    pub fn find_index(&self, target_id: u8) -> Option<usize> {
+        // compiler turns O(N) scan into O(1) SIMD lookup
+        // because the id list is only 16 bytes
+        self.ids.iter().position(|&id| id == target_id)
+    }
+
+    /// adds a new socket to the registry
+    pub fn insert_socket(&mut self, socket: SocketFramed, id: u8) -> Result<u8, SocketFramed> {
+        // if registry set is full, error out
+        if self.len >= 16 { return Err(socket); }
+
+        // Find first empty index
+        let slot = self.registry.iter().position(|s| s.is_none()).unwrap();
+        self.ids[slot] = id; self.registry[slot] = Some(socket);
+
+        self.next_id += 1; self.len += 1; Ok(id)
+    }
+
+    pub fn insert_addr(&mut self, addr: SocketAddr) -> Result<usize, SocketAddr> {
+        if self.len >= 16 { return Err(addr) };
+
+        let index = self.registry.iter().position(|s| s.is_none()).unwrap();
+        self.address_list[index] = addr; Ok(index)
+    }
+
+    /// function to remove a socket from the registry
+    pub fn remove(&mut self, id: u8) -> Option<(SocketFramed, u8)> {
+        let index = self.find_index(id)?;
+
+        let socket = self.registry[index].take()?;
+
+        // reset the ID in the index and decrement the length
+        self.ids[index] = u8::MAX; self.len -= 1;
+
+        Some((socket, id))
+    }
+
+    // O(1) (due to vectorization) lookup to any given socket via its id
+    pub fn get_socket_by_id(&mut self, id: u8) -> Option<&mut SocketFramed> {
+        let index = self.find_index(id)?;
+        self.registry[index].as_mut()
+    }
+
+    pub fn get_socket_by_idx(&mut self, idx: usize) -> Option<&mut SocketFramed> {
+        self.registry[idx].as_mut()
+    }
 }
 
 pub type ConsensusTools = ConsensusToolsStruct;
 
 /// @enum The main enum by which all methods - channel and peer through sockets - communicate with any consensus engine actor
-/// * @branch ConsensusReqeust: requesting the actor to start consensus
+/// * @branch ConsensusRequest: requesting the actor to start consensus
 ///     * @field transaction: The transaction to be commited to the blockchain
 /// ---
 /// * @branch PeerConsensusRequest: the same thing as consensus request, just for peer, 
@@ -68,26 +117,32 @@ pub enum ActorRequest {
     PeerVote { vote_type: Bytes, signed_msg: Bytes, pubkey: [u8; 32] }
 }
 
-pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: std::net::SocketAddr }
+pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: SocketAddr, pub node_id: u8 }
+
+/// Structure that the leader node uses to communicate with the bootnode
+#[derive(Serialize, Deserialize)]
+pub struct RegistryUpdate { addrs: [SocketAddr; 16], ids: [u8; 16] }
+
+pub static DEFAULT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
 /// @function starts the leader node server. function that handles requests from peer nodes
-/// the consensus actor and the netowrk state actor are both started in this fn as long running tasks
+/// the consensus actor and the netowrk state actor are both started in this fn as long-running tasks
 /// * @param network_runtime - the tokio runtime handle for a reader task. can and is cloned per reader
 pub async fn start_server() -> io::Result<()> {
-    let registry: PeerRegistry = Vec::with_capacity(10);
-    let listener = TcpListener::bind(ADDRESS).await.unwrap();
-    let tools = ConsensusToolsStruct { 
-        sequence_counter: 0, view_number: 0, registry, 
-        address_list: Vec::with_capacity(10) };
+    let address_list: [SocketAddr; 16] = [DEFAULT_ADDR; 16]; let ids: [u8; 16] = [0; 16];
+
+    let listener = TcpListener::bind(ADDRESS).await?;
+    let tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
+        registry: [const { None }; 16], address_list, ids, len: 0, next_id: 0 };
 
     println!("Server started at {}", ADDRESS);
 
     // create the manager sender and receiver queue ends
     let (transaction_sender, mut transaction_receiver) = mpsc::channel::<Transaction>(32);
 
-    // primary method of communicating with the hot loop
-    // @returns peer_tx: used by the reader_task so they can peers can communicate with hot loop task
-    let (peer_tx, peer_receiver) = mpsc::channel::<ActorRequest>(512);
+    // primary method of communicating with the consensus actor
+    // @returns peer_tx: used by the reader_task so they can peers can communicate with actor task
+    let (peer_tx, peer_receiver) = mpsc::channel::<ActorRequest>(256);
 
     // channel sender and receiver to add a new peer to the registry
     let (registration_tx, registration_rx) = 
@@ -130,7 +185,7 @@ pub async fn start_server() -> io::Result<()> {
     tokio::pin!(sleep);
 
     // create a buffer to store the result from the select
-    let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
+    let mut network_buffer: Option<Result<BytesMut, io::Error>>;
     while let Ok((socket, addr)) = listener.accept().await {
         println!("Peer node {addr} connected to primary");
 
@@ -142,7 +197,7 @@ pub async fn start_server() -> io::Result<()> {
         // start the timer
         reset_timer(&mut sleep, 2000);
 
-        // select between the connceted client responding and a timeout
+        // select between the connected client responding and a timeout
         tokio::select! { value = read_framed.next() => { network_buffer = value } 
             _ = &mut sleep => { eprintln!("from leader - client didn't respond in time, dropping"); continue; } } 
 
@@ -161,7 +216,7 @@ pub async fn start_server() -> io::Result<()> {
             tokio::task::spawn(reader_task(read_framed, _peer_tx, Box::from(pubkey_packet.payload))); 
 
             // send a registration request to the consensus enigne receiver to register the write half
-            let request = RegistrationRequest { socket: write_socket, addr };
+            let request = RegistrationRequest { socket: write_socket, addr, node_id: pubkey_packet.node_id };
 
             io_err(registration_tx.send(request).await)?;
 
@@ -172,10 +227,10 @@ pub async fn start_server() -> io::Result<()> {
     Ok(())
 }
 
-/// @function consensus actor: actor handler for the consensus engine hot loop
+/// @function consensus actor: actor handler for the consensus engine
 ///  * @param commit_sender: Sender end of channel engine uses 
 ///    to send completed transactions back to state manager 
-///  * @param tools: criical tools (seq_counter, view_number, peer_socket_registry)
+///  * @param tools: critical tools (seq_counter, view_number, peer_socket_registry)
 ///    required for consensus
 ///  * @param peer_receiver: entryway for peer sockets to communicate with consensus
 pub async fn leader_consensus_actor(
@@ -199,10 +254,12 @@ pub async fn leader_consensus_actor(
 
     let pubkey = keypair.verifying_key().to_bytes();
 
-    // send the bootnode the leader verification packet
-    send_connection_packet("leader", ADDRESS, Some(&pubkey), 
-        &mut bootnode_framed, &mut serialize_pool).await;
-
+    // send the bootnode the leader verification packet (with null ID to be ignored, the bootnode will send the proper one)
+    if let Err(_) = send_connection_packet("leader", ADDRESS, Some(&pubkey),
+         0, &mut bootnode_framed, &mut serialize_pool).await 
+            { eprintln!("Could not register leader address with bootnode") }
+    
+    // TODO - The bootnode will send back the leader node's ID. Handle it
 
     loop { tokio::select! {
         biased;
@@ -216,23 +273,32 @@ pub async fn leader_consensus_actor(
                     match consensus_engine(transaction, &mut tools, &mut peer_receiver, 
                         &mut commit_sender, &mut serialize_pool, &mut keypair).await {
                             Ok(_) => { println!("Consensus has been reached"); },
-                            Err(e) => { eprintln!("Consensus failed with error: {}", e); }
+                            Err(e) => { eprintln!("Consensus from leader failed with error: {}", e); }
                         }
                 },
-                _ => eprintln!("Invalid message from peer")
+                _ => eprintln!("Invalid message from peer - leader")
             }
         }
 
         Some(request) = registration_rx.recv() => {
             // onboarding task request to add a new peer to the registry
             let socket_framed = Framed::new(request.socket, socket_codec.clone());
-            tools.registry.push(socket_framed);
+
+            // push the socket-id pair and increment the id
+            if let Err(_) = tools.insert_socket(socket_framed, request.node_id) {
+                eprintln!("Could not insert socket for registration"); continue;
+            }
 
             // add the address to the address list
-            tools.address_list.push(request.addr);
+            if let Err(_) = tools.insert_addr(request.addr) {
+                eprintln!("Could not insert addr for registration"); continue;
+            }
+
+            // construct the registry update packet
+            let registry_update = RegistryUpdate { addrs: tools.address_list, ids: tools.ids };
 
             // serialize the addresses into the heap buffer
-            let addr_packet = serialize_into(&mut serialize_pool, &tools.address_list);
+            let addr_packet = serialize_into(&mut serialize_pool, &registry_update);
 
             // send the entire list as a serialized Vec<SocketAddr>
             let _ = bootnode_framed.send(addr_packet.freeze()).await;
@@ -242,7 +308,7 @@ pub async fn leader_consensus_actor(
 
 /// @function passed to the multithreaded runtime. 
 /// Spanwed as a task-per-connection architecture to route each connection's 
-/// network request to the consensus/hot loop actor
+/// network request to the consensus actor
 /// * @param read_socket: the read half of the connection's socket, 
 /// to receive that connection's requests
 /// * @param peer_tx: sender channel to send transaction requests to the consensus actor
@@ -251,17 +317,17 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
     // framed next for the socket codec - framing entire messages
     while let Some(Ok(read_buffer)) = read_framed.next().await {
 
-        // Step 1 - deserailize client request (change for proper error handling)
+        // Step 1 - deserialize client request (change for proper error handling)
         match deserialize_packet::<ActorRequest>(&read_buffer) {
 
             // Step 2 - send either transaction payload or vote to the consensus actor
-            // (all recievers expect payload type ActorRequest 
+            // (all receivers expect payload type ActorRequest
             // so just pass along the deserialized request)
             Ok(request) => { match request {
 
                 // If it's a vote or cert from a peer, verify it before sending to quorum counter
                 ActorRequest::PeerVote { ref vote_type, ref signed_msg, pubkey: _ } => {
-                    // Step 1 - create the verifyng key from the pubkey bytes
+                    // Step 1 - create the verifying key from the pubkey bytes
                     let key_bytes: [u8; 32] = io_err(pubkey[..].try_into())?;
                     let verifying_key = io_err(VerifyingKey::from_bytes(&key_bytes))?;
 
@@ -292,24 +358,24 @@ pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<Acto
 
 /// @function CPU bound consensus engine function to be ran per consensus
 /// * @param transaction: Transaction to be committed to the network/chain
-/// * @param tools: Tools (registery, sequence counter, view number) for consensus
-/// * @param vote receiver: the recieving end of the channel all peers send their votes through
+/// * @param tools: Tools (registry, sequence counter, view number) for consensus
+/// * @param vote receiver: the receiving end of the channel all peers send their votes through
 /// * @param commit sender: the sending end of the channel to send the final transaction back to the state manager
 /// * @param leader socket (optional): An option representing the leader socket that only peers use 
 /// * @param signing key: the private key that the current node uses to sign their vote certs
 pub async fn consensus_engine(
-    transaction: Transaction, 
+    transaction: Transaction,
     tools: &mut ConsensusTools,
-    vote_reciever: &mut mpsc::Receiver<ActorRequest>, 
-    commit_sender: &mut mpsc::Sender<Transaction>, 
+    vote_receiver: &mut mpsc::Receiver<ActorRequest>,
+    commit_sender: &mut mpsc::Sender<Transaction>,
     serialization_pool: &mut BytesMut,
     signing_key: &mut SigningKey) -> io::Result<()> {
 
     // STEP 0 - calculate f (# of faulty nodes in pbft consensus equation)
     // if N = 3f + 1 holds true, where N = nodes, there can be at most (N - 1) / 3 faulty nodes
-    let faulty = (( tools.registry.len() - 1 ) / 3).max(1) as u32;
+    let faulty = (( tools.len ) / 3).max(1) as u32;
 
-    // timers in tokio are seperate futures of their own when directly awaited on
+    // timers in tokio are separate futures of their own when directly awaited on
     // so create a timer that gets recalculated instead of created and dropped over and over
     let sleep = tokio::time::sleep(Duration::from_millis(1500));
 
@@ -323,15 +389,15 @@ pub async fn consensus_engine(
 
     // create a transaction actor request to send to peers
     let tx_bytes = serialize_into(serialization_pool, &tx_request);
-    let tx_payload = tx_bytes.freeze().clone(); 
+    let tx_payload = tx_bytes.freeze().clone();
 
     reset_timer(&mut sleep, 1500);
 
     // loop through registry and send proposal to all peer nodes
-    for socket_frame in &mut tools.registry {
+    for x in 0..tools.len {
         // set a timout - we don't want to hang sending to nonresponsive peers
         tokio::select! {
-            _ = socket_frame.send(tx_payload.clone()) => {}
+            _ = tools.get_socket_by_idx(x).unwrap().send(tx_payload.clone()) => {}
             _ = &mut sleep => { println!("Peer hanged, skipping"); }
         }
 
@@ -365,8 +431,8 @@ pub async fn consensus_engine(
                 reset_timer(&mut sleep, 1500);
 
                 // loop through registry and send PREPARE vote to all peer nodes
-                for socket_frame in &mut tools.registry {
-                    send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
+                for x in 0..tools.len {
+                    send_with_timeout(tools.get_socket_by_idx(x).unwrap(), vote_payload.clone(), &mut sleep).await;
 
                     reset_timer(&mut sleep, 1500);
                 }
@@ -376,7 +442,7 @@ pub async fn consensus_engine(
     } reset_timer(&mut sleep, 3000);
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+        _ = wait_for_quorum(vote_receiver, sequence_counters, &mut quorum_counter,
                 faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
@@ -384,23 +450,22 @@ pub async fn consensus_engine(
     
 
     // reset the quorum and timer for the COMMIT vote
-    quorum_counter = 1; while let Ok(_) = vote_reciever.try_recv() { /* clear out any PREPARE votes */ }
+    quorum_counter = 1; while let Ok(_) = vote_receiver.try_recv() { /* clear out any PREPARE votes */ }
     reset_timer(&mut sleep, 1500);
 
     // STEP 3: Once quorum for prepare has been reached, prepare a commit certificate
     let vote_payload = create_vote("COMMIT", &signing_key, serialization_pool);
 
     // Broadcast commit message and wait again for commit quorum
-    for socket_frame in &mut tools.registry {
-        // set a timout - we don't want to hang sending to nonresponsive peers
-        send_with_timeout(socket_frame, vote_payload.clone(), &mut sleep).await;
+    for x in 0..tools.len {
+        send_with_timeout(tools.registry[x].as_mut().unwrap(), vote_payload.clone(), &mut sleep).await;
 
         // reset the deadline for the next loop
         reset_timer(&mut sleep, 1500);
     }
 
     tokio::select! {
-        _ = wait_for_quorum(vote_reciever, sequence_counters, &mut quorum_counter, 
+        _ = wait_for_quorum(vote_receiver, sequence_counters, &mut quorum_counter,
                 faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
 
         _ = &mut sleep => 
