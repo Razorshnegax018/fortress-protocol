@@ -16,11 +16,13 @@ static PEER_ADDRESS: &str = "127.0.0.1:6376";
 
 /// Zero copy transport format that contains a node's type, its address, and it's pubkey for ID
 /// (copied from crate)
+
 #[derive(Serialize, Deserialize)]
 pub struct ConnectionPacket<'a> {
-    #[serde(borrow, with = "serde_bytes")] pub node_type: &'a [u8], 
-    #[serde(borrow, with = "serde_bytes")] pub address: &'a [u8], 
-    #[serde(borrow, with = "serde_bytes")] pub payload: &'a [u8]
+    #[serde(borrow, with = "serde_bytes")] pub address: &'a [u8],
+    #[serde(borrow, with = "serde_bytes")] pub payload: &'a [u8],
+    #[serde(borrow, with = "serde_bytes")] pub node_type: &'a [u8],
+    pub node_id: u8
 }
 
 /** Data that the client sends to a peer when requesting a mutation (copy of struct from crate) */
@@ -64,7 +66,7 @@ async fn main() -> std::io::Result<()> {
 
     // craft connection packet
     let packet = ConnectionPacket {
-        node_type: b"client-transaction", address: b"127.0.0.1:0", payload: &client_tx_bytes,
+        node_type: b"client-transaction", address: b"127.0.0.1:0", payload: &client_tx_bytes, node_id: 255
     };
 
     let payload = serialize_into(&mut pool, &packet).freeze();
@@ -81,6 +83,8 @@ async fn main() -> std::io::Result<()> {
 
     // wait few seconds for peer, then drop
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+
+    println!("Packet sent");
 
     Ok(())
 }
