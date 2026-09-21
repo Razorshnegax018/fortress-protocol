@@ -1,5 +1,38 @@
 ### Journey documentation
 
+- Sept 20th
+  - Lots of code written to implement the NodeID structure. In order to avoid having a (T, U) Array of tuples, we maintain a separate 16 byte array for each of the IDs so during lookup the cpu can load the entire array into a register and check all of them simultaneously 
+  - Continuing on with the view change update, but this big refactor is foundational for this update
+
+- Sept 14th
+  - Let's reiterate some design choices I made. I have the *leader node* send the bootnode the up-to-date list on any and all updates because while yes peers register with the bootnode whenever they *join* the network, they don't whenever they *leave*. There is no sign out sheet. They just die, and the bootnode has no way of knowing that
+
+- Sept 13th
+  - I think I've got it down. Of course I could be wrong and have to refactor everything yet again. Here's the idea:
+    - Upon connection to the bootnode, the bootnode sends the peer the list of other peers *as well as* assigning said peer a peer ID number. This means that whenever it's time for the peer to connect to other peers, as well as the leader, that peer will already have its ID ready
+      - Of course the dropping peer problem - how do we make sure registries are synchronized - is an issue to be solved with the block (in my case individual transaction) height epoch boundaries (only allow registry changes on specific sequence numbers)
+    - Then, upon view change, whenever the NEW-VIEW message is broadcasted, peers will know exactly which peer ("Peer ID 3" or "Peer ID 7" is)
+    - This also means, I'm thinking of getting rid of the separate leader socket variable, as I can just keep track of a global LEADER_ID static Cell and use that to find the leader
+
+- Sept 11th
+	- I want to stress that this project is functional - it goes through the three phase consensus, kills rounds with timeouts, and handles peer vote verification, transaction propogation, and quorum collection - but is not complete. I've been wrestling in my head with how I'm supposed to do view change and I *still* haven't found a *performant* answer.
+
+	- The easy and obvious method is to (1) instead of just storing `SocketFramed` (Framed<OwnedWriteHalf, LengthDelimitedCodec>), I need to tag each socket with an ID for tracking. Requires a changing of some types and structs and whatnot...
+      - Below I try and justify bad Array of Struct design. Even if it's negligible with 16 elements the point of this project is to build good muscles. I go onto the right path above, just not this reasoning that follows:
+      - ...it's not as big as socketaddr (which isn't even that big in the first place), so I actually see no reason *not* to do that actually. a usize for the id - if not a usize, a u8, hundreds of nodes in pbft kills network bandwidth, much less than 4 billion - is not going do destroy cache locality when working with a struct that might already spill over mac m4's 128 byte cache line size (I've seen multiple answers for how big `SocketFramed` is, ranging from 112 to 160)
+
+	- and (2) storing IDs in a separate array (which is the right choice that I eventually make)
+
+- Sept 6th
+	- Back at it. Finishing up key requirements - view changes, peer eviction, and peer joining - as well as building foundations for new projects (looking to build a udp-based FTP implementation as practice for a Solana turbine clone)
+
+	- Right now working on the view change timer - it starts on a local task, not quite each time a peer communicates with the leader, but slightly after - and 
+
+	- That's about as far as I've gotten bro. 
+		- one idea is to call the 'view change' function inside the task which owns the view change timer. Issue is, the view change function will require basically all of the same variables as the consensus itself, so the arg list for wait_for_quorum would get massively long for references that aren't used in the 99% path.
+
+		- Is that a performance hit that matters, that's the question
+
 - August 29th
 	- I have an idea on dynamic nodes joining and getting dropped. 
 		- So the original pbft paper doesn't specify how validator nodes should join and leave, because it assumes a static, known list of validators. Modern implementations either have an on-chain vote to allow new validators to join or kick them out, or run on a PoS model where validator voting power is continuously changing based on staked tokens
@@ -16,7 +49,7 @@
 	- All in all I learned a lot through this project. It was a good timesink during summer and I hope it sharpened my low level skills
 
 - August 19th
-	- I started this project on June 2nd, but I started documenting June 9th. Between those two dates were two months of brutal optimization, nonsense architecture, and even more nonsense errors. I'm not finished with the entire project. I still need to implement peer eviction, view changes, and quorum syncing, but do you know what? Today is the day I finnaly read it - "Consensus reached"
+	- I started this project June 2nd (but started documentation on June 9th) and now it's August 19th. Between those two dates were two months of brutal optimization, nonsense architecture, and even more nonsense errors. I'm not finished with the entire project. I still need to implement peer eviction, view changes, and quorum syncing, but do you know what? Today is the day I finally read it - "Consensus reached"
 
 - August 18th
 	- I think these two days I was working on consensus dude I'm so sorry for whoever decides to read this I totally fell off with documentation at the very end
