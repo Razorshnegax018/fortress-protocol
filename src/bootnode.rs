@@ -1,0 +1,214 @@
+use std::{net::IpAddr, rc::Rc, time::Duration};
+
+use serde::Serialize;
+use tokio::{io, net::{TcpListener, TcpStream}, sync::{Mutex, oneshot}};
+use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+use bytes::{BufMut, Bytes, BytesMut};
+
+use futures::{SinkExt, StreamExt};
+
+use std::cell::Cell;
+use tokio::task::JoinHandle;
+use crate::{infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
+use crate::utils::utils::send_connection_packet;
+
+pub static BOOTNODE_ADDRESS: &'static str = "127.0.0.1:1100";
+
+// we use a thread local global static because we don't need atomics
+thread_local! {
+	static UPDATED_LIST: Cell<bool> = const { Cell::new(false) };
+	static NODE_ID_COUNTER: Cell<u8> = const { Cell::new(0) };
+}
+
+#[derive(Serialize)]
+struct StoragePacket { address: Bytes, payload: Bytes, node_type: &'static [u8], node_id: u8 }
+
+#[derive(Serialize)]
+struct RefuseConnection { msg: &'static [u8] }
+
+/// The list with all the peer addresses, stored as storage packets. 
+/// They need to stored as unserialized Storage packets because 
+/// bincode cannot mass-deserialize something that was serialized piece by piece
+/// Rc<Mutex> is used in a singlethreaded context because of the "RefCell" paradox - 
+/// (Task A borrows refcell, task b gets scheduled while task A holds it, singlethreaded primitive panics)
+type AddressList = Rc<Mutex<Vec<StoragePacket>>>;
+
+pub async fn start_bootnode() {
+	let listener = TcpListener::bind(BOOTNODE_ADDRESS).await
+		.expect("Bootnode could not start");
+
+	// List/registry of all connected peers in the network. 
+	// we use an uncontended async mutex because that's the tool that allows thread-safe tasks to work cooperatively
+	let address_list: AddressList  = Rc::new(Mutex::new(Vec::with_capacity(128)));
+	let update_task_list = address_list.clone();
+
+	/* oneshots to send the leader socket from the join task to the listener task */
+	let (_leader_tx, leader_rx) = oneshot::channel::<Framed<TcpStream, LengthDelimitedCodec>>();
+
+	// Task 1 - listen for changes to registry from leader node
+	let update_listener_task = tokio::task::spawn_local(async move {
+
+		// first, before we can listen, we need to get the leader connection first
+		let Ok(mut leader_socket) = leader_rx.await
+			else { eprintln!("Leader failed to connect to bootnode"); return; };
+
+		println!("Bootnode waiting for updates from the leader node...");
+		while let Some(Ok(addr_list)) = leader_socket.next().await {
+			let mut write_lock = update_task_list.lock().await;
+
+			// deserialize addr list and clear out old addresses from write lock
+			let Ok(addresses) = deserialize_packet::<Vec<(std::net::SocketAddr, usize)>>(&addr_list) 
+				else { eprintln!("leader sent bad addr list"); continue; }; write_lock.clear();
+
+			// while there are still address bytes in the network buffer
+			// copy the entire value from the network into the list buffer
+			for (addr, id) in addresses {
+				// derive the IP from the address
+				let mut ip = match addr.ip() { IpAddr::V4(ip) => ip.octets().to_vec(),
+					IpAddr::V6(v6) => v6.octets().to_vec() };
+
+				// craft the full address using the ip and port
+				ip.extend_from_slice(":".as_bytes()); ip.put_u16(addr.port());
+
+				// make the connection packet for storage
+				let packet = StoragePacket {
+					node_type: b"client", address: Bytes::copy_from_slice(&ip), 
+					payload: Bytes::new(), node_id: id as u8 };
+
+				// extend the list with the new connection packet
+				write_lock.push(packet);
+			}
+
+			// updated list - toggle updated list flag
+			UPDATED_LIST.with(|toggle| toggle.set(true))
+		}
+
+		// DEBUGGING 
+		eprintln!("update listener task complete")
+	});
+	let join_task_list = address_list.clone();
+
+	// Task 2 - listen to connections from new peers
+	let join_task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {
+		// create the payload buffer to store cached address lists
+		let mut payload = BytesMut::with_capacity(1024);
+		
+		// a separate, smaller pool to be used for serialization (to avoid overwriting the cache)
+		let mut send_pool = BytesMut::with_capacity(256);
+
+		// create a buffer to store the result from the select
+    	let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
+
+		println!("Bootnode waiting for new nodes to join...");
+
+		// create a reusable timeout timer
+		let sleep = tokio::time::sleep(Duration::from_millis(500));
+
+		tokio::pin!(sleep);
+
+		// create the option wrapper for the leader sender
+		let mut leader_tx = Some(_leader_tx);
+		while let Ok((socket, addr)) = listener.accept().await {
+			println!("FROM BOOTNODE - New node addr {} joined", addr.to_string());
+
+			reset_timer(&mut sleep, 750);
+
+			// create a framed for the connected machine - leader or peer
+			// TODO - dynamically split and rebuild to change size depending of if it's leader or peer
+			let mut socket_framed = make_framed(socket, 1024);
+
+			// select between the connected client responding and a timeout
+        	tokio::select! { value = socket_framed.next() => { network_buffer = value } 
+            	_ = &mut sleep => { eprintln!("client didn't respond in time, dropping"); continue; } }
+
+			if let Some(Ok(packet)) = network_buffer {
+				// error handling is inside the function. Skip this connection if the peer sends a bad packet
+            	let Ok(connected_packet) = deserialize_packet::<ConnectionPacket>(&packet) 
+                	else { eprintln!("peer sent a bad packet, dropping connection"); continue; };
+
+				// acquire the lock on the list mutex 
+				let list = &mut *join_task_list.lock().await;
+
+				match connected_packet.node_type.as_ref() {
+					// if the connection request is from the leader, 
+					b"leader" => {
+						// we need to if let on the borrow because if let on the value takes ownership
+						// which might have the value be dropped on the send connection packet failure
+						if let Some(_) = &leader_tx {
+							// Make an ID for the leader and send it back
+							if let Err(_) = send_connection_packet("bootnode", BOOTNODE_ADDRESS, None,
+								NODE_ID_COUNTER.get(), &mut socket_framed, &mut send_pool).await {
+								eprintln!("Failed to send connection packet to leader node "); continue;
+							}
+							
+							// increment the ID counter
+							NODE_ID_COUNTER.set(NODE_ID_COUNTER.get() + 1);
+
+							// send the leader socket to the update listener task
+							// so it can connect to the leader and start listening for updates from it
+							let _ = leader_tx.unwrap().send(socket_framed); leader_tx = None;
+						} else { eprintln!("Leader socket already connected"); continue; }
+
+						// push the leader storage packet into the list
+						let storage_packet = StoragePacket {
+							node_type: b"leader", address: Bytes::copy_from_slice(connected_packet.address),
+							payload: Bytes::copy_from_slice(connected_packet.payload), node_id: NODE_ID_COUNTER.get() };
+
+						list.push(storage_packet); println!("Leader socket connected and verified");
+
+						// updated list - toggle updated list flag
+						UPDATED_LIST.set(true);
+
+						// increment the ID counter
+						NODE_ID_COUNTER.set(NODE_ID_COUNTER.get() + 1);
+					}, 
+
+					// if the connection request is from a peer,
+					b"peer-pubkey" => {
+						// first, check to see if there's space for new validators
+						if list.len() >= 16 {
+							// if there's not, craft a "connection refused" packet
+							// TODO - I need to look closely at what actually happens, but I might need to change this back to
+							//  ConnectionPacket, because I think the way I have it set up is that it tries to 
+							//   deserialize as ConnPacket, fails, and then tries refusal packet, which isn't very efficient
+							bincode::serialize_into((&mut payload).writer(), &RefuseConnection { msg: b"Validators Full" }).unwrap();
+							
+							// send it to connected peer and continue on with loop
+							socket_framed.send(payload.split_off(payload.len()).freeze()).await?;
+						}
+
+						// 1) TODO - For now, just send the ID as an u8 first without standardizing it.
+						socket_framed.send(Bytes::copy_from_slice(&[NODE_ID_COUNTER.get()])).await?;
+
+						// if the registry has been updated, rebuild the payload
+						UPDATED_LIST.with(|updated| { if updated.get() {
+								// clear out the old payload/address list and reserve enough space in it
+								payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
+
+								// serialize the address list into the payload
+								bincode::serialize_into((&mut payload).writer(), list).unwrap();
+							} // if not, skip rebuild send the cached payload
+						});
+						
+						// send the full address list to the client alongside the assigned ID
+						if let Err(_) = socket_framed.send(payload.clone().freeze()).await {
+							eprintln!("Failed to send response to connecting peer node"); continue; }
+
+						// TODO - Send Peer node ID
+
+						println!("List sent to addr");
+					}, _ => { eprintln!("Bootnode received bad packet"); continue; }
+				}
+			}
+		}
+
+		// DEBUGGING
+		eprintln!("Jointask complete "); Ok(())
+	});
+
+	// if either task crashes take down the server
+	tokio::select! { _ = update_listener_task => {} _ = join_task => {} }
+
+	println!("Bootnode service closing...");
+}
