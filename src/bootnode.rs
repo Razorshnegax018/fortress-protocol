@@ -10,7 +10,7 @@ use futures::{SinkExt, StreamExt};
 
 use std::cell::Cell;
 use tokio::task::JoinHandle;
-use crate::{infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
+use crate::{infra_main::RegistryUpdate, infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
 use crate::utils::utils::send_connection_packet;
 
 pub static BOOTNODE_ADDRESS: &'static str = "127.0.0.1:1100";
@@ -49,7 +49,7 @@ pub async fn start_bootnode() {
 	// Task 1 - listen for changes to registry from leader node
 	let update_listener_task = tokio::task::spawn_local(async move {
 
-		// first, before we can listen, we need to get the leader connection first
+		// first, before we can listen, we need to get the leader socket first
 		let Ok(mut leader_socket) = leader_rx.await
 			else { eprintln!("Leader failed to connect to bootnode"); return; };
 
@@ -58,12 +58,16 @@ pub async fn start_bootnode() {
 			let mut write_lock = update_task_list.lock().await;
 
 			// deserialize addr list and clear out old addresses from write lock
-			let Ok(addresses) = deserialize_packet::<Vec<(std::net::SocketAddr, usize)>>(&addr_list) 
+			let Ok(update_struct) = deserialize_packet::<RegistryUpdate>(&addr_list) 
 				else { eprintln!("leader sent bad addr list"); continue; }; write_lock.clear();
 
 			// while there are still address bytes in the network buffer
 			// copy the entire value from the network into the list buffer
-			for (addr, id) in addresses {
+			for idx in 0..update_struct.addrs.len() {
+				// grab the address and the id
+				let addr = update_struct.addrs[idx];
+				let id = update_struct.ids[idx];
+
 				// derive the IP from the address
 				let mut ip = match addr.ip() { IpAddr::V4(ip) => ip.octets().to_vec(),
 					IpAddr::V6(v6) => v6.octets().to_vec() };
@@ -71,10 +75,10 @@ pub async fn start_bootnode() {
 				// craft the full address using the ip and port
 				ip.extend_from_slice(":".as_bytes()); ip.put_u16(addr.port());
 
-				// make the connection packet for storage
+				// make the connection packet for storage (simply re-attach the given node id)
 				let packet = StoragePacket {
 					node_type: b"client", address: Bytes::copy_from_slice(&ip), 
-					payload: Bytes::new(), node_id: id as u8 };
+					payload: Bytes::new(), node_id: id };
 
 				// extend the list with the new connection packet
 				write_lock.push(packet);
@@ -137,13 +141,16 @@ pub async fn start_bootnode() {
 						// which might have the value be dropped on the send connection packet failure
 						if let Some(_) = &leader_tx {
 							// Make an ID for the leader and send it back
+
+							// it might be good practice to standardize the sending as a connection packet
+							// but I see no reason to do that over sending a u8
+
+							socket_framed.send(Bytes::copy_from_slice(&[NODE_ID_COUNTER.get()])).await?;
+							/* 
 							if let Err(_) = send_connection_packet("bootnode", BOOTNODE_ADDRESS, None,
 								NODE_ID_COUNTER.get(), &mut socket_framed, &mut send_pool).await {
 								eprintln!("Failed to send connection packet to leader node "); continue;
-							}
-							
-							// increment the ID counter
-							NODE_ID_COUNTER.set(NODE_ID_COUNTER.get() + 1);
+							} */
 
 							// send the leader socket to the update listener task
 							// so it can connect to the leader and start listening for updates from it
@@ -178,7 +185,7 @@ pub async fn start_bootnode() {
 							socket_framed.send(payload.split_off(payload.len()).freeze()).await?;
 						}
 
-						// 1) TODO - For now, just send the ID as an u8 first without standardizing it.
+						// For now, just send the ID as an u8 first without standardizing it.
 						socket_framed.send(Bytes::copy_from_slice(&[NODE_ID_COUNTER.get()])).await?;
 
 						// if the registry has been updated, rebuild the payload

@@ -5,6 +5,7 @@ use std::sync::atomic::AtomicU8;
 use std::sync::atomic::Ordering::Relaxed;
 use std::thread::JoinHandle;
 use std::time::Duration;
+use arrayvec::ArrayVec;
 use bincode::deserialize;
 use gdt_cpus::ThreadPriority::Highest;
 use tokio::net::tcp::OwnedWriteHalf;
@@ -15,7 +16,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use futures::{SinkExt, StreamExt};
 
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 
 use serde::{Serialize, Deserialize};
 
@@ -27,11 +28,12 @@ use crate::{
 };
 
 use rand::rngs::OsRng;
-use ed25519_dalek::SigningKey;
+use ed25519_dalek::{Signer, SigningKey};
 
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 
 static LEADER_NODE_ID: AtomicU8 = AtomicU8::new(0);
+static SELF_ID: AtomicU8 = AtomicU8::new(0);
 
 /// Zero copy transport format that contains a node's type, its address, and its pubkey for ID, and the actual node_id
 #[derive(Serialize, Deserialize)]
@@ -47,19 +49,22 @@ pub struct RefusalPacket<'a> { #[serde(borrow)] pub msg: &'a [u8] }
 
 pub type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 
-pub async fn discover_network() -> io::Result<()> {
-    let address_list: [SocketAddr; 16] = [DEFAULT_ADDR; 16]; let ids: [u8; 16] = [0; 16];
+pub async fn discover_network(port: &str) -> io::Result<()> {
+    let address_list: [SocketAddr; 16] = [DEFAULT_ADDR; 16]; let ids: [u8; 16] = [u8::MAX; 16];
+
+    let active_indexes: ArrayVec<usize, 16> = ArrayVec::new();
 
     // create the struct for tools for consensus
-    let mut tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0,
-        registry: [const { None }; 16], address_list, ids, len: 0, next_id: 0 };
+    let mut tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
+        registry: [const { None }; 16], address_list, ids, active_indexes, len: 0, next_id: 0 };
 
     // leader socket that may or may not exist
     let mut leader_socket = false;
 
     // grab the port from the cmdline
     // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
-    let address = format!("127.0.0.1:{}", "6376");
+    let self_address = port;
+    let mut self_id: u8 = 0;
 
     // general use serialize pool
     let mut serialize_pool = BytesMut::with_capacity(1024);
@@ -83,10 +88,8 @@ pub async fn discover_network() -> io::Result<()> {
         let mut socket_framed = make_framed(socket, 1024);
 
         // send a pubkey confirmation packet to the bootnode
-        send_connection_packet("peer-pubkey", &address, 
+        send_connection_packet("peer-pubkey", &self_address, 
             Some(&self_pubkey), 0, &mut socket_framed, &mut serialize_pool).await?;
-
-        let mut self_id: u8 = 0; // declare self id in outer scope
 
         // get your node ID from the bootnode
         if let Some(Ok(mut value)) = socket_framed.next().await {
@@ -112,23 +115,24 @@ pub async fn discover_network() -> io::Result<()> {
                             // named "peer-pubkey", even though this is possibly the leader pubkey, to distinguish 
                             // from "self_pubkey", or even worse, the highly descriptive name of just "pubkey"
                             let peer_pubkey = packet.payload;
-                            
-                            // Store the leader node id
-                            LEADER_NODE_ID.store(packet.node_id, Relaxed);
 
                             // 1) send a pubkey confirmation packet to peer
-                            if let Err(_) = send_connection_packet("peer-pubkey", &address,
-                                Some(&self_pubkey), self_id, &mut write_framed, &mut serialize_pool).await {
+                            if let Err(_) = send_connection_packet("peer-pubkey", &self_address,
+                                Some(&self_pubkey), SELF_ID.load(Relaxed), &mut write_framed, &mut serialize_pool).await {
                                 eprintln!("Peer failed to connect to another peer"); todo!()
 
                                 // TODO: Implement retry logic
                             }
 
+                            let addr: SocketAddr = io_err(str::from_utf8(packet.address).unwrap().parse())?;
+
                             // 2) add the writer into the registry
-                            let _ = tools.insert_socket(write_framed, packet.node_id);
+                            let _ = tools.insert_socket(write_framed, addr, packet.node_id);
 
                             // 2b) - if it's the leader node, then store their ID
                             if packet.node_type == b"leader" {
+                                println!("packet received from leader node with id {}", packet.node_id );
+
                                 LEADER_NODE_ID.store(packet.node_id, Relaxed);
                                 leader_socket = true;
                             }
@@ -140,7 +144,7 @@ pub async fn discover_network() -> io::Result<()> {
                             tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
 
                         },
-                        Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*address); }
+                        Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*self_address); }
                     }
                 }
             } else if let Ok(refusal_packet) = deserialize_packet::<RefusalPacket>(&value) {
@@ -150,21 +154,17 @@ pub async fn discover_network() -> io::Result<()> {
         }
     } 
 
-    // TODO - THIS CODE IS WRONG, IT WILL ALWAYS BE NONE, BECAUSE
-    //  THE LEADER SOCKET WAS ADDED TO THE REGISTRY. REFACTOR THE CODE
-    //  SO THAT THE LEADER SOCKET IS ACCESSED USING GET_SOCKET_BY_ID
     if !leader_socket { panic!("No leader node found") }
 
-    if let Err(e) = start_server(tools, keypair, address, engine_tx, peer_rx).await
+    if let Err(e) = start_server(tools, self_id, keypair, self_address, engine_tx, peer_rx).await
         { eprintln!("Peer node server exited with Error: {}", e); }
-
 
     println!("Peer node server closed"); Ok(())
 }
 
 async fn start_server(
-    tools: ConsensusToolsStruct,
-    signing_key: SigningKey, address: String,
+    tools: ConsensusToolsStruct, self_id: u8,
+    signing_key: SigningKey, address: &str,
     engine_tx: mpsc::Sender<ActorRequest>,
     peer_rx: mpsc::Receiver<ActorRequest>) -> io::Result<()> {
 
@@ -206,7 +206,7 @@ async fn start_server(
 
                 // run the actor on the localset 
                 local.spawn_local(peer_consensus_actor(commit_sender, tools, peer_rx,
-                   registration_rx, signing_key));
+                   registration_rx, signing_key, self_id));
 
                 // start the localset   
                 local.await; }); Ok(())
@@ -311,7 +311,7 @@ async fn peer_consensus_actor(
     mut tools: ConsensusTools, 
     mut peer_rx: mpsc::Receiver<ActorRequest>,
     mut registration_rx: mpsc::Receiver<RegistrationRequest>, 
-    mut signing_key: SigningKey) {
+    mut signing_key: SigningKey, self_id: u8) {
 
     let socket_codec = LengthDelimitedCodec::builder()
         .length_field_length(2).little_endian().new_codec();
@@ -328,10 +328,9 @@ async fn peer_consensus_actor(
                 // client/peer node request to commit a transaction
                 ActorRequest::ConsensusRequest { transaction } => {
                     // execute consensus
-
                     match peer_consensus_engine(transaction, &mut tools, &mut peer_rx, 
-                        &mut commit_sender, &mut serialize_pool, &mut signing_key).await {
-                        Ok(_) => { println!("Consensus has been reached"); },
+                        &mut commit_sender, &mut serialize_pool, &mut signing_key, &self_id).await {
+                        Ok(_) => {  },
                         Err(e) => { eprintln!("Consensus from peer failed with error: {}", e); }
                     }
                 },
@@ -342,14 +341,14 @@ async fn peer_consensus_actor(
 
                     // then, craft the actual consensus request (move the tx field, which moving a list of ptrs)
                     let true_request = ActorRequest::ConsensusRequest { transaction };
-
+                    
                     // route the transaction to the leader node
-                    if let Err(_) = tools.get_socket_by_id(LEADER_NODE_ID.load(Relaxed))
-                        .unwrap().send(serialize_into(&mut serialize_pool, &true_request).freeze()).await {
+                    if let Err(_) = tools.get_socket_by_id(LEADER_NODE_ID.load(Relaxed)).unwrap()
+                        .send(serialize_into(&mut serialize_pool, &true_request).freeze()).await {
                             eprintln!("Failed to send transaction to leader socket");
                     }
                 },
-                _ => eprintln!("Invalid message from peer - peer")
+                _ => eprintln!("Invalid message from peer - peer, request: {:?}", request)
             }
         }
 
@@ -357,11 +356,12 @@ async fn peer_consensus_actor(
 
         // wait for join requests from fellow peers
         Some(request) = registration_rx.recv() => {
-            // add a new peer to the registry
             let socket_framed = Framed::new(request.socket, socket_codec.clone());
 
-            // push the socket-id pair and increment the id
-            let _ = tools.insert_socket(socket_framed, request.node_id);
+            // add the socket and address to the registry
+            if let Err(_) = tools.insert_socket(socket_framed, request.addr, request.node_id) {
+                eprintln!("Could not insert socket for registration"); continue;
+            }
         }
     } }
 }
@@ -379,7 +379,7 @@ pub async fn peer_consensus_engine(
     vote_receiver: &mut mpsc::Receiver<ActorRequest>,
     commit_sender: &mut mpsc::Sender<Transaction>,
     serialization_pool: &mut BytesMut,
-    signing_key: &mut SigningKey) -> io::Result<()> {
+    signing_key: &mut SigningKey, self_id: &u8) -> io::Result<()> {
 
     // STEP 0 - calculate f (# of faulty nodes in pbft consensus equation)
     // if N = 3f + 1 holds true, where N = nodes, there can be at most (N - 1) / 3 faulty nodes
@@ -411,9 +411,9 @@ pub async fn peer_consensus_engine(
 
             reset_timer(&mut sleep, 1500);
 
-            // loop through registry and send PREPARE vote to all peer nodes
-            for x in 0..tools.len {
-                send_with_timeout(tools.registry[x].as_mut().unwrap(), vote_payload.clone(), &mut sleep).await;
+            // loop through registry (active-ids list) and send PREPARE vote to all peer nodes
+            for index in &tools.active_indexes {
+                send_with_timeout(&mut tools.registry[*index].as_mut().unwrap(), vote_payload.clone(), &mut sleep).await;
 
                 reset_timer(&mut sleep, 1500);
             }
@@ -429,29 +429,28 @@ pub async fn peer_consensus_engine(
 
     tokio::select! {
         _ = wait_for_quorum(vote_receiver, sequence_counters, &mut quorum_counter, 
-                faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+                 tools.len, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
     
     // clean up the counter and the voter queue in preparation for receiving the commit votes
-    quorum_counter = 1; while let Ok(_) = vote_receiver.try_recv() { /* clear out any PREPARE votes */ }
-    reset_timer(&mut sleep, 1500);
+    // (reset counter to 1 to include this given node's vote)
+    quorum_counter = 1; reset_timer(&mut sleep, 1500);
 
     // STEP 3: Once quorum for prepare has been reached, prepare a commit certificate
     let vote_payload = create_vote("COMMIT", &signing_key, serialization_pool);
-    
-    // Broadcast commit message and wait again for commit quorum
-    for x in 0..tools.len {
-        send_with_timeout(tools.registry[x].as_mut().unwrap(), vote_payload.clone(), &mut sleep).await;
 
-        // reset the deadline for the next loop
+    // Broadcast commit message and wait again for commit quorum
+    for index in &tools.active_indexes {
+        send_with_timeout(&mut tools.registry[*index].as_mut().unwrap(), vote_payload.clone(), &mut sleep).await;
+
         reset_timer(&mut sleep, 1500);
     }
 
     tokio::select! {
         _ = wait_for_quorum(vote_receiver, sequence_counters, &mut quorum_counter, 
-                faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
+                tools.len, faulty, b"COMMIT") => { println!("Commit quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
@@ -468,32 +467,10 @@ pub async fn peer_consensus_engine(
 
     // peer needs to use the static thread local cell
     tools.sequence_counter += 1;
+
+    println!("Consensus has been reached");
     
 
     Ok(())
 
 }
-
-/* 
-
-/// @function to trigger view change, stripping leader of their rights
-/// @param all params same as `consensus_engine`
-pub async fn trigger_view_change(tools: &mut ConsensusTools, leader_socket: &mut SocketFramed, 
-    signing_key: &SigningKey, serialization_pool: &mut BytesMut) {
-    // craft the VIEW CHANGE message
-    let change_msg = create_vote("VIEW-CHANGE", &signing_key, serialization_pool);
-
-    let next_leader = tools.view_number as usize % tools.address_list.len();
-
-
-
-    // so we'd need to handle the following issues
-
-    // 1) leader promotion (peer -> leader) and demotion (leader -> peer)
-
-    // 2) node identification (right now I just have addresses - who is node 0?)
-
-    // bunch of code that makes it hard to work a
-
-
-}  */

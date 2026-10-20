@@ -38,16 +38,16 @@ fn create_leader_node() -> tokio::io::Result<()> {
     Ok(())
 }
 
-fn create_peer_node() -> tokio::io::Result<()> {
+fn create_peer_node(port: &str) -> tokio::io::Result<()> {
     println!("Peernode runtime started");
 
     // make the multi-threaded reader runtime
     let network_runtime = tokio::runtime::Builder::new_multi_thread()
-        .thread_name("peer-runtime").enable_all().build()?;
+        .thread_name("peer-runtime").worker_threads(2).enable_all().build()?;
 
     // start the main server on the multithreaded runtime
     network_runtime.block_on(async move {
-        let _ = infra_peer::discover_network().await;
+        let _ = infra_peer::discover_network(port).await;
     });
     Ok(())
 }
@@ -77,9 +77,14 @@ fn main() -> tokio::io::Result<()> {
     // create the peernode main multithreaded runtime
     let _peernode_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
         
-        let _ = create_peer_node(); peer_tx.send("fin").unwrap();
+        let _ = create_peer_node("127.0.0.1:6376"); peer_tx.send("fin").unwrap();
 
         Ok(()) }); 
+    
+    let _another_peer_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
+        
+        let _ = create_peer_node("127.0.0.1:6276"); Ok(())
+    });
 
     // Wait for the threads to prevent main from exiting immediately
     select! {

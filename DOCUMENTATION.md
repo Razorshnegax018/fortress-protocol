@@ -1,5 +1,12 @@
 ### Journey documentation
 
+- Oct 18th
+	- Lots of code written to *fix* the NodeID structure, because the implementation that was written earlier was wrong, had a bug. We need to maintain a seperate list called "active-ids" and then iterate through *that* so that we don't iterate over and unrwap any hole in the old 0..tools.len
+      - Another bug was bootnode NODE_ID_COUNTER double counting, and 
+	- Also removed the separate "leader socket" variable from the peer nodes so that we don't have to manage that variable across different functions, peer node keeps the leader's ID as a global static atomic
+    -  Big moves made on view change, added a payload field to PeerVote so it can carry around view number and seq counter, 
+
+
 - Sept 20th
   - Lots of code written to implement the NodeID structure. In order to avoid having a (T, U) Array of tuples, we maintain a separate 16 byte array for each of the IDs so during lookup the cpu can load the entire array into a register and check all of them simultaneously 
   - Continuing on with the view change update, but this big refactor is foundational for this update
