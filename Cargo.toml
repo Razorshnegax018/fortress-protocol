@@ -4,7 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [profile.release]
-debug = true
+opt-level = 3           # Maximum speed optimizations
+lto = "fat"             # Aggressive link-time optimization across all crates
+codegen-units = 1       # Single compilation unit yields maximum LLVM optimization scope
+panic = "abort"         # Removes unwind overhead, stack frames, and landing pads
+strip = "symbols"       # Strips symbol tables to reduce binary size and improve cache locality
 
 [dependencies]
 tokio = { version = "1.50", features = ["full"] }

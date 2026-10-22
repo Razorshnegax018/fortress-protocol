@@ -1,0 +1,115 @@
+	.p2align	2
+<fortress_protocol::infra_main::ConsensusToolsStruct>::find_index:
+Lfunc_begin211:
+	.cfi_startproc
+	and w8, w1, #0xff
+	ldrb w9, [x0, #3208]
+	cmp w9, w8
+	b.ne LBB211_2
+	mov x1, #0
+	mov w0, #1
+	ret
+LBB211_2:
+	ldrb w9, [x0, #3209]
+	cmp w9, w8
+	b.ne LBB211_4
+	mov w1, #1
+	mov w0, #1
+	ret
+LBB211_4:
+	ldrb w9, [x0, #3210]
+	cmp w9, w8
+	b.ne LBB211_6
+	mov w0, #1
+	mov w1, #2
+	ret
+LBB211_6:
+	ldrb w9, [x0, #3211]
+	cmp w9, w8
+	b.ne LBB211_8
+	mov w0, #1
+	mov w1, #3
+	ret
+LBB211_8:
+	ldrb w9, [x0, #3212]
+	cmp w9, w8
+	b.ne LBB211_10
+	mov w0, #1
+	mov w1, #4
+	ret
+LBB211_10:
+	ldrb w9, [x0, #3213]
+	cmp w9, w8
+	b.ne LBB211_12
+	mov w0, #1
+	mov w1, #5
+	ret
+LBB211_12:
+	ldrb w9, [x0, #3214]
+	cmp w9, w8
+	b.ne LBB211_14
+	mov w0, #1
+	mov w1, #6
+	ret
+LBB211_14:
+	ldrb w9, [x0, #3215]
+	cmp w9, w8
+	b.ne LBB211_16
+	mov w0, #1
+	mov w1, #7
+	ret
+LBB211_16:
+	ldrb w9, [x0, #3216]
+	cmp w9, w8
+	b.ne LBB211_18
+	mov w0, #1
+	mov w1, #8
+	ret
+LBB211_18:
+	ldrb w9, [x0, #3217]
+	cmp w9, w8
+	b.ne LBB211_20
+	mov w0, #1
+	mov w1, #9
+	ret
+LBB211_20:
+	ldrb w9, [x0, #3218]
+	cmp w9, w8
+	b.ne LBB211_22
+	mov w0, #1
+	mov w1, #10
+	ret
+LBB211_22:
+	ldrb w9, [x0, #3219]
+	cmp w9, w8
+	b.ne LBB211_24
+	mov w0, #1
+	mov w1, #11
+	ret
+LBB211_24:
+	ldrb w9, [x0, #3220]
+	cmp w9, w8
+	b.ne LBB211_26
+	mov w0, #1
+	mov w1, #12
+	ret
+LBB211_26:
+	ldrb w9, [x0, #3221]
+	cmp w9, w8
+	b.ne LBB211_28
+	mov w0, #1
+	mov w1, #13
+	ret
+LBB211_28:
+	ldrb w9, [x0, #3222]
+	cmp w9, w8
+	b.ne LBB211_30
+	mov w0, #1
+	mov w1, #14
+	ret
+LBB211_30:
+	ldrb w9, [x0, #3223]
+	cmp w9, w8
+	cset w0, eq
+	mov w1, #15
+	ret

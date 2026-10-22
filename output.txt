@@ -1,0 +1,2204 @@
+.section __TEXT,__text,regular,pure_instructions
+	.p2align	2
+<core::fmt::Error as core::fmt::Debug>::fmt.1023:
+Lfunc_begin323:
+	.cfi_startproc
+	ldp x0, x8, [x1]
+	ldr x3, [x8, #24]
+Lloh3451:
+	adrp x1, l_anon.3ee7dd604835ffb806d7399f89fd3d27.737@PAGE
+Lloh3452:
+	add x1, x1, l_anon.3ee7dd604835ffb806d7399f89fd3d27.737@PAGEOFF
+	mov w2, #5
+	br x3
+	.loh AdrpAdd	Lloh3451, Lloh3452
+Lfunc_end323:
+	.cfi_endproc
+
+	.p2align	2
+core::ptr::drop_glue::<alloc::string::String>:
+Lfunc_begin324:
+	.cfi_startproc
+	ldr x8, [x0]
+	cbz x8, LBB324_2
+	ldr x0, [x0, #8]
+	mov w1, #1
+	b __rustc::__rust_dealloc
+LBB324_2:
+	ret
+Lfunc_end324:
+	.cfi_endproc
+
+	.p2align	2
+<alloc::string::String as core::fmt::Write>::write_str.1024:
+Lfunc_begin325:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	.cfi_def_cfa_offset 48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_remember_state
+	mov x19, x2
+	mov x20, x0
+	ldr x21, [x0, #16]
+	ldr x8, [x0]
+	sub x8, x8, x21
+	cmp x2, x8
+	b.hi LBB325_4
+	cbz x19, LBB325_3
+LBB325_2:
+	ldr x8, [x20, #8]
+	add x0, x8, x21
+	mov x2, x19
+	bl _memcpy
+LBB325_3:
+	add x8, x21, x19
+	str x8, [x20, #16]
+	mov w0, #0
+	.cfi_def_cfa wsp, 48
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	.cfi_def_cfa_offset 0
+	.cfi_restore w30
+	.cfi_restore w29
+	.cfi_restore w19
+	.cfi_restore w20
+	.cfi_restore w21
+	.cfi_restore w22
+	ret
+LBB325_4:
+	.cfi_restore_state
+	mov x0, x20
+	mov x22, x1
+	mov x1, x21
+	mov x2, x19
+	bl <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+	mov x1, x22
+	ldr x21, [x20, #16]
+	b LBB325_2
+Lfunc_end325:
+	.cfi_endproc
+
+	.p2align	2
+<alloc::string::String as core::fmt::Write>::write_char.1025:
+Lfunc_begin326:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	.cfi_def_cfa_offset 48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	ldr x19, [x0, #16]
+	mov w8, #2
+	cmp w1, #16, lsl #12
+	mov w9, #3
+	cinc x9, x9, hs
+	cmp w1, #2048
+	csel x8, x8, x9, lo
+	cmp w1, #128
+	csinc x20, x8, xzr, hs
+	ldr x8, [x0]
+	sub x8, x8, x19
+	cmp x20, x8
+	b.hi LBB326_3
+	ldr x8, [x0, #8]
+	add x8, x8, x19
+	cmp w1, #128
+	b.hs LBB326_4
+LBB326_2:
+	strb w1, [x8]
+	b LBB326_9
+LBB326_3:
+	mov x21, x0
+	mov x22, x1
+	mov x1, x19
+	mov x2, x20
+	bl <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+	mov x1, x22
+	mov x0, x21
+	ldr x8, [x21, #8]
+	add x8, x8, x19
+	cmp w1, #128
+	b.lo LBB326_2
+LBB326_4:
+	mov w10, #-128
+	mov w9, #-128
+	bfxil w9, w1, #0, #6
+	cmp w1, #2048
+	b.hs LBB326_6
+	lsr w10, w1, #6
+	orr w10, w10, #0xc0
+	strb w10, [x8]
+	strb w9, [x8, #1]
+	b LBB326_9
+LBB326_6:
+	mov w11, #-128
+	bfxil w11, w1, #6, #6
+	lsr w12, w1, #16
+	cbnz w12, LBB326_8
+	lsr w10, w1, #12
+	orr w10, w10, #0xe0
+	strb w10, [x8]
+	strb w11, [x8, #1]
+	strb w9, [x8, #2]
+	b LBB326_9
+LBB326_8:
+	lsr w12, w1, #18
+	orr w12, w12, #0xfffffff0
+	strb w12, [x8]
+	bfxil w10, w1, #12, #6
+	strb w10, [x8, #1]
+	strb w11, [x8, #2]
+	strb w9, [x8, #3]
+LBB326_9:
+	add x8, x20, x19
+	str x8, [x0, #16]
+	mov w0, #0
+	.cfi_def_cfa wsp, 48
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	.cfi_def_cfa_offset 0
+	.cfi_restore w30
+	.cfi_restore w29
+	.cfi_restore w19
+	.cfi_restore w20
+	.cfi_restore w21
+	.cfi_restore w22
+	ret
+Lfunc_end326:
+	.cfi_endproc
+
+	.p2align	2
+<alloc::string::String as core::fmt::Write>::write_fmt:
+Lfunc_begin327:
+	.cfi_startproc
+	mov x3, x2
+	mov x2, x1
+Lloh3453:
+	adrp x1, l_anon.26ef4df49a6c567a9aa6993a79f2daed.34@PAGE
+Lloh3454:
+	add x1, x1, l_anon.26ef4df49a6c567a9aa6993a79f2daed.34@PAGEOFF
+	b core::fmt::write
+	.loh AdrpAdd	Lloh3453, Lloh3454
+Lfunc_end327:
+	.cfi_endproc
+
+	.p2align	2
+<<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::fmt::Debug>::fmt:
+Lfunc_begin328:
+	.cfi_startproc
+	mov x2, x1
+	ldp x8, x1, [x0, #8]
+	mov x0, x8
+	b <str as core::fmt::Debug>::fmt
+Lfunc_end328:
+	.cfi_endproc
+
+	.p2align	2
+<alloc::string::String as core::clone::Clone>::clone:
+Lfunc_begin329:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	.cfi_def_cfa_offset 48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_remember_state
+	mov x20, x0
+	ldr x19, [x1, #16]
+	cbz x19, LBB329_3
+	ldr x22, [x1, #8]
+	mov x0, x19
+	mov w1, #1
+	bl __rustc::__rust_alloc
+	cbz x0, LBB329_5
+	mov x21, x0
+	mov x1, x22
+	mov x2, x19
+	bl _memcpy
+	b LBB329_4
+LBB329_3:
+	mov w21, #1
+LBB329_4:
+	stp x19, x21, [x20]
+	str x19, [x20, #16]
+	.cfi_def_cfa wsp, 48
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	.cfi_def_cfa_offset 0
+	.cfi_restore w30
+	.cfi_restore w29
+	.cfi_restore w19
+	.cfi_restore w20
+	.cfi_restore w21
+	.cfi_restore w22
+	ret
+LBB329_5:
+	.cfi_restore_state
+	mov w0, #1
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+Lfunc_end329:
+	.cfi_endproc
+
+	.p2align	2
+<&[u8] as <alloc::ffi::c_str::CString>::new::SpecNewImpl>::spec_new_impl:
+Lfunc_begin330:
+	.cfi_startproc
+	sub sp, sp, #96
+	.cfi_def_cfa_offset 96
+	stp x24, x23, [sp, #32]
+	stp x22, x21, [sp, #48]
+	stp x20, x19, [sp, #64]
+	stp x29, x30, [sp, #80]
+	add x29, sp, #80
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	.cfi_remember_state
+	adds x21, x2, #1
+	b.mi LBB330_17
+	mov x20, x2
+	mov x23, x1
+	mov x19, x0
+	mov x0, x21
+	mov w1, #1
+	bl __rustc::__rust_alloc
+	cbz x0, LBB330_18
+	mov x22, x0
+	mov x1, x23
+	mov x2, x20
+	bl _memcpy
+	add x8, x23, #7
+	and x8, x8, #0xfffffffffffffff8
+	subs x8, x8, x23
+	b.eq LBB330_6
+	mov x9, #0
+LBB330_4:
+	ldrb w10, [x23, x9]
+	cbz w10, LBB330_15
+	add x9, x9, #1
+	cmp x8, x9
+	b.ne LBB330_4
+LBB330_6:
+	mov x9, #72340172838076673
+	movk x9, #256
+	sub x10, x20, #16
+	mov x11, #-9187201950435737472
+LBB330_7:
+	add x12, x23, x8
+	ldp x13, x12, [x12]
+	sub x14, x9, x13
+	orr x13, x14, x13
+	sub x14, x9, x12
+	orr x12, x14, x12
+	and x12, x13, x12
+	bics xzr, x11, x12
+	b.ne LBB330_9
+	add x8, x8, #16
+	cmp x8, x10
+	b.ls LBB330_7
+LBB330_9:
+	subs x9, x20, x8
+	b.eq LBB330_13
+	mov x10, #0
+	add x11, x23, x8
+LBB330_11:
+	ldrb w12, [x11, x10]
+	cbz w12, LBB330_14
+	add x10, x10, #1
+	cmp x9, x10
+	b.ne LBB330_11
+LBB330_13:
+	stp x21, x22, [sp, #8]
+	str x20, [sp, #24]
+	add x0, sp, #8
+	bl <alloc::ffi::c_str::CString>::_from_vec_unchecked
+	stp x0, x1, [x19, #8]
+	mov x8, #-1
+	str x8, [x19]
+	b LBB330_16
+LBB330_14:
+	add x9, x10, x8
+LBB330_15:
+	stp x21, x22, [x19]
+	stp x20, x9, [x19, #16]
+LBB330_16:
+	.cfi_def_cfa wsp, 96
+	ldp x29, x30, [sp, #80]
+	ldp x20, x19, [sp, #64]
+	ldp x22, x21, [sp, #48]
+	ldp x24, x23, [sp, #32]
+	add sp, sp, #96
+	.cfi_def_cfa_offset 0
+	.cfi_restore w30
+	.cfi_restore w29
+	.cfi_restore w19
+	.cfi_restore w20
+	.cfi_restore w21
+	.cfi_restore w22
+	.cfi_restore w23
+	.cfi_restore w24
+	ret
+LBB330_17:
+	.cfi_restore_state
+	bl alloc::raw_vec::capacity_overflow
+LBB330_18:
+	mov w0, #1
+	mov x1, x21
+	bl alloc::raw_vec::handle_error
+Lfunc_end330:
+	.cfi_endproc
+
+	.p2align	2
+<<alloc::boxed::Box<dyn core::error::Error + core::marker::Sync + core::marker::Send> as core::convert::From<alloc::string::String>>::from::StringError as core::fmt::Display>::fmt:
+Lfunc_begin331:
+	.cfi_startproc
+	mov x8, x1
+	ldp x1, x2, [x0, #8]
+	mov x0, x8
+	b <core::fmt::Formatter>::pad
+Lfunc_end331:
+	.cfi_endproc
+
+	.p2align	2
+<alloc::boxed::Box<bincode::error::ErrorKind> as core::convert::From<std::io::error::Error>>::from:
+Lfunc_begin332:
+	.cfi_startproc
+	stp x20, x19, [sp, #-32]!
+	stp x29, x30, [sp, #16]
+	add x29, sp, #16
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	mov x19, x0
+	mov w0, #24
+	mov w1, #8
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB332_2
+	mov x8, #-9223372036854775808
+	stp x8, x19, [x0]
+	ldp x29, x30, [sp, #16]
+	ldp x20, x19, [sp], #32
+	ret
+LBB332_2:
+	mov w0, #8
+	mov w1, #24
+	bl alloc::alloc::handle_alloc_error
+Lfunc_end332:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_odd_clone:
+Lfunc_begin333:
+	.cfi_startproc
+	mov x5, x2
+	mov x4, x1
+	ldapr x2, [x0]
+	tbnz w2, #0, LBB333_3
+	add x9, x2, #16
+	mov w10, #1
+	ldadd x10, x9, [x9]
+	tbnz x9, #63, LBB333_4
+	stp x5, x2, [x8, #16]
+Lloh3455:
+	adrp x9, bytes::bytes::SHARED_VTABLE@PAGE
+Lloh3456:
+	add x9, x9, bytes::bytes::SHARED_VTABLE@PAGEOFF
+	stp x9, x4, [x8]
+	ret
+LBB333_3:
+	mov x1, x0
+	mov x0, x8
+	mov x3, x2
+	b bytes::bytes::shallow_clone_vec
+LBB333_4:
+	stp x29, x30, [sp, #-16]!
+	mov x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	bl bytes::abort
+	.loh AdrpAdd	Lloh3455, Lloh3456
+Lfunc_end333:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_odd_to_vec:
+Lfunc_begin334:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x19, x2
+	mov x2, x1
+	mov x20, x8
+	ldapr x21, [x0]
+	tbnz w21, #0, LBB334_2
+	mov x0, x20
+	mov x1, x21
+	mov x3, x19
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	b bytes::bytes::shared_to_vec_impl
+LBB334_2:
+	sub x8, x2, x21
+	add x22, x8, x19
+	mov x0, x21
+	mov x1, x2
+	mov x2, x19
+	bl _memmove
+	stp x22, x21, [x20]
+	str x19, [x20, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+Lfunc_end334:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_odd_to_mut:
+Lfunc_begin335:
+	.cfi_startproc
+	stp x24, x23, [sp, #-64]!
+	stp x22, x21, [sp, #16]
+	stp x20, x19, [sp, #32]
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x19, x2
+	mov x2, x1
+	ldapr x1, [x0]
+	tbnz w1, #0, LBB335_2
+	mov x0, x8
+	mov x3, x19
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	b bytes::bytes::shared_to_mut_impl
+LBB335_2:
+	subs x9, x2, x1
+	add x20, x9, x19
+	lsr x9, x20, #10
+	clz x9, x9
+	mov w10, #64
+	sub x9, x10, x9
+	mov w10, #7
+	cmp x9, #7
+	csel x9, x9, x10, lo
+	mov w10, #1
+	orr x21, x10, x9, lsl #2
+	subs x22, x2, x1
+	b.eq LBB335_5
+	lsr x9, x22, #59
+	cbnz x9, LBB335_6
+	add x21, x21, x22, lsl #5
+	b LBB335_8
+LBB335_5:
+	mov x19, x20
+	b LBB335_9
+LBB335_6:
+	mov x24, x1
+	mov x23, x8
+	mov w0, #40
+	mov w1, #8
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB335_10
+	ubfx x8, x21, #2, #3
+	stp x20, x24, [x0]
+	mov x1, x24
+	stp x20, x8, [x0, #16]
+	mov w8, #1
+	mov x21, x0
+	str x8, [x0, #32]
+	mov x8, x23
+LBB335_8:
+	add x1, x1, x22
+	subs x9, x20, x22
+	csel x20, xzr, x9, lo
+LBB335_9:
+	stp x1, x20, [x8]
+	stp x19, x21, [x8, #16]
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	ret
+LBB335_10:
+	mov w0, #8
+	mov w1, #40
+	bl alloc::alloc::handle_alloc_error
+Lfunc_end335:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_is_unique:
+Lfunc_begin336:
+	.cfi_startproc
+	ldapr x8, [x0]
+	tbnz w8, #0, LBB336_2
+	ldr x8, [x8, #16]
+	cmp x8, #1
+	cset w0, eq
+	ret
+LBB336_2:
+	mov w0, #1
+	ret
+Lfunc_end336:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_odd_drop:
+Lfunc_begin337:
+	.cfi_startproc
+	sub sp, sp, #48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	ldr x0, [x0]
+	tbnz w0, #0, LBB337_4
+	add x8, x0, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB337_6
+	ldapur xzr, [x0, #16]
+	ldr x8, [x0, #8]
+	tbnz x8, #63, LBB337_8
+	ldr x8, [x0]
+	mov x19, x0
+	mov x0, x8
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	b __rustc::__rdl_dealloc
+LBB337_4:
+	sub x8, x1, x0
+	cmn x8, x2
+	b.mi LBB337_7
+	mov w1, #1
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	b __rustc::__rdl_dealloc
+LBB337_6:
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	ret
+LBB337_7:
+Lloh3457:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3458:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3459:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3460:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3461:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.27@PAGE
+Lloh3462:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.27@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+LBB337_8:
+Lloh3463:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3464:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3465:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3466:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3467:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGE
+Lloh3468:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+	.loh AdrpAdd	Lloh3461, Lloh3462
+	.loh AdrpAdd	Lloh3459, Lloh3460
+	.loh AdrpAdd	Lloh3457, Lloh3458
+	.loh AdrpAdd	Lloh3467, Lloh3468
+	.loh AdrpAdd	Lloh3465, Lloh3466
+	.loh AdrpAdd	Lloh3463, Lloh3464
+Lfunc_end337:
+	.cfi_endproc
+
+	.p2align	2
+<core::alloc::layout::LayoutError as core::fmt::Debug>::fmt.1032:
+Lfunc_begin338:
+	.cfi_startproc
+	mov x0, x1
+Lloh3469:
+	adrp x1, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.55@PAGE
+Lloh3470:
+	add x1, x1, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.55@PAGEOFF
+	mov w2, #11
+	b <core::fmt::Formatter>::write_str
+	.loh AdrpAdd	Lloh3469, Lloh3470
+Lfunc_end338:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_to_mut_impl:
+Lfunc_begin339:
+	.cfi_startproc
+	sub sp, sp, #80
+	stp x24, x23, [sp, #16]
+	stp x22, x21, [sp, #32]
+	stp x20, x19, [sp, #48]
+	stp x29, x30, [sp, #64]
+	add x29, sp, #64
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x19, x3
+	mov x23, x2
+	mov x22, x1
+	mov x20, x0
+	ldapur x8, [x1, #16]
+	cmp x8, #1
+	b.ne LBB339_4
+	ldp x21, x24, [x22]
+	mov x0, x22
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+	lsr x8, x24, #10
+	clz x8, x8
+	mov w9, #64
+	sub x8, x9, x8
+	mov w9, #7
+	cmp x8, #7
+	csel x8, x8, x9, lo
+	subs x23, x23, x21
+	add x19, x23, x19
+	mov w9, #1
+	orr x22, x9, x8, lsl #2
+	b.eq LBB339_15
+	lsr x8, x23, #59
+	cbnz x8, LBB339_12
+	add x22, x22, x23, lsl #5
+	b LBB339_14
+LBB339_4:
+	tbnz x19, #63, LBB339_17
+	cbz x19, LBB339_8
+	mov x0, x19
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB339_18
+	mov x21, x0
+	mov x1, x23
+	mov x2, x19
+	bl _memcpy
+	add x8, x22, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.eq LBB339_9
+	b LBB339_11
+LBB339_8:
+	mov w21, #1
+	add x8, x22, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB339_11
+LBB339_9:
+	ldapur xzr, [x22, #16]
+	ldr x8, [x22, #8]
+	tbnz x8, #63, LBB339_19
+	ldr x0, [x22]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+	mov x0, x22
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+LBB339_11:
+	lsr x8, x19, #10
+	clz x8, x8
+	mov w9, #64
+	sub x8, x9, x8
+	mov w9, #7
+	cmp x8, #7
+	csel x8, x8, x9, lo
+	mov w9, #1
+	orr x22, x9, x8, lsl #2
+	mov x24, x19
+	b LBB339_15
+LBB339_12:
+	mov w0, #40
+	mov w1, #8
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB339_16
+	ubfx x8, x22, #2, #3
+	stp x24, x21, [x0]
+	stp x19, x8, [x0, #16]
+	mov w8, #1
+	mov x22, x0
+	str x8, [x0, #32]
+LBB339_14:
+	add x21, x21, x23
+	subs x8, x19, x23
+	csel x19, xzr, x8, lo
+	sub x24, x24, x23
+LBB339_15:
+	stp x21, x19, [x20]
+	stp x24, x22, [x20, #16]
+	ldp x29, x30, [sp, #64]
+	ldp x20, x19, [sp, #48]
+	ldp x22, x21, [sp, #32]
+	ldp x24, x23, [sp, #16]
+	add sp, sp, #80
+	ret
+LBB339_16:
+	mov w0, #8
+	mov w1, #40
+	bl alloc::alloc::handle_alloc_error
+LBB339_17:
+	mov x0, #0
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+LBB339_18:
+	mov w0, #1
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+LBB339_19:
+Lloh3471:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3472:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3473:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3474:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3475:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGE
+Lloh3476:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+	.loh AdrpAdd	Lloh3475, Lloh3476
+	.loh AdrpAdd	Lloh3473, Lloh3474
+	.loh AdrpAdd	Lloh3471, Lloh3472
+Lfunc_end339:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_to_vec_impl:
+Lfunc_begin340:
+	.cfi_startproc
+	sub sp, sp, #80
+	stp x24, x23, [sp, #16]
+	stp x22, x21, [sp, #32]
+	stp x20, x19, [sp, #48]
+	stp x29, x30, [sp, #64]
+	add x29, sp, #64
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x20, x3
+	mov x22, x2
+	mov x19, x1
+	mov x21, x0
+	add x8, x1, #16
+	mov w9, #1
+	casal x9, xzr, [x8]
+	cmp x9, #1
+	b.ne LBB340_2
+	ldp x23, x24, [x19]
+	mov x0, x19
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+	mov x0, x23
+	mov x1, x22
+	mov x2, x20
+	bl _memmove
+	stp x24, x23, [x21]
+	str x20, [x21, #16]
+	ldp x29, x30, [sp, #64]
+	ldp x20, x19, [sp, #48]
+	ldp x22, x21, [sp, #32]
+	ldp x24, x23, [sp, #16]
+	add sp, sp, #80
+	ret
+LBB340_2:
+	tbnz x20, #63, LBB340_10
+	cbz x20, LBB340_8
+	mov x0, x20
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB340_11
+	stp x20, x0, [x21]
+	mov x1, x22
+	mov x2, x20
+	bl _memcpy
+	str x20, [x21, #16]
+	add x8, x19, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB340_9
+LBB340_6:
+	ldapur xzr, [x19, #16]
+	ldr x8, [x19, #8]
+	tbnz x8, #63, LBB340_12
+	ldr x0, [x19]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #64]
+	ldp x20, x19, [sp, #48]
+	ldp x22, x21, [sp, #32]
+	ldp x24, x23, [sp, #16]
+	add sp, sp, #80
+	b __rustc::__rdl_dealloc
+LBB340_8:
+	mov w8, #1
+	stp xzr, x8, [x21]
+	str xzr, [x21, #16]
+	add x8, x19, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.eq LBB340_6
+LBB340_9:
+	ldp x29, x30, [sp, #64]
+	ldp x20, x19, [sp, #48]
+	ldp x22, x21, [sp, #32]
+	ldp x24, x23, [sp, #16]
+	add sp, sp, #80
+	ret
+LBB340_10:
+	mov x0, #0
+	mov x1, x20
+	bl alloc::raw_vec::handle_error
+LBB340_11:
+	mov w0, #1
+	mov x1, x20
+	bl alloc::raw_vec::handle_error
+LBB340_12:
+Lloh3477:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3478:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3479:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3480:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3481:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGE
+Lloh3482:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+	.loh AdrpAdd	Lloh3481, Lloh3482
+	.loh AdrpAdd	Lloh3479, Lloh3480
+	.loh AdrpAdd	Lloh3477, Lloh3478
+Lfunc_end340:
+	.cfi_endproc
+
+	.p2align	2
+bytes::abort:
+Lfunc_begin341:
+	.cfi_startproc
+	stp x29, x30, [sp, #-16]!
+	mov x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	bl std::process::abort
+Lfunc_end341:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shallow_clone_vec:
+Lfunc_begin342:
+	.cfi_startproc
+	stp x24, x23, [sp, #-64]!
+	stp x22, x21, [sp, #16]
+	stp x20, x19, [sp, #32]
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x21, x5
+	mov x19, x4
+	mov x24, x3
+	mov x22, x2
+	mov x23, x1
+	mov x20, x0
+	mov w0, #24
+	mov w1, #8
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB342_5
+	sub x8, x19, x24
+	add x8, x8, x21
+	stp x24, x8, [x0]
+	mov w8, #2
+	str x8, [x0, #16]
+	mov x8, x22
+	casal x8, x0, [x23]
+	cmp x8, x22
+	b.ne LBB342_3
+	stp x21, x0, [x20, #16]
+Lloh3483:
+	adrp x8, bytes::bytes::SHARED_VTABLE@PAGE
+Lloh3484:
+	add x8, x8, bytes::bytes::SHARED_VTABLE@PAGEOFF
+	stp x8, x19, [x20]
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	ret
+LBB342_3:
+	add x9, x8, #16
+	mov w10, #1
+	ldadd x10, x9, [x9]
+	tbnz x9, #63, LBB342_6
+	stp x21, x8, [x20, #16]
+Lloh3485:
+	adrp x8, bytes::bytes::SHARED_VTABLE@PAGE
+Lloh3486:
+	add x8, x8, bytes::bytes::SHARED_VTABLE@PAGEOFF
+	stp x8, x19, [x20]
+	mov w1, #8
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	b __rustc::__rdl_dealloc
+LBB342_5:
+	mov w0, #8
+	mov w1, #24
+	bl alloc::alloc::handle_alloc_error
+LBB342_6:
+	bl bytes::abort
+	.loh AdrpAdd	Lloh3483, Lloh3484
+	.loh AdrpAdd	Lloh3485, Lloh3486
+Lfunc_end342:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_clone:
+Lfunc_begin343:
+	.cfi_startproc
+	ldr x9, [x0]
+	add x10, x9, #16
+	mov w11, #1
+	ldadd x11, x10, [x10]
+	tbnz x10, #63, LBB343_2
+	stp x2, x9, [x8, #16]
+Lloh3487:
+	adrp x9, bytes::bytes::SHARED_VTABLE@PAGE
+Lloh3488:
+	add x9, x9, bytes::bytes::SHARED_VTABLE@PAGEOFF
+	stp x9, x1, [x8]
+	ret
+LBB343_2:
+	stp x29, x30, [sp, #-16]!
+	mov x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	bl bytes::abort
+	.loh AdrpAdd	Lloh3487, Lloh3488
+Lfunc_end343:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_to_vec:
+Lfunc_begin344:
+	.cfi_startproc
+	mov x3, x2
+	mov x2, x1
+	ldr x1, [x0]
+	mov x0, x8
+	b bytes::bytes::shared_to_vec_impl
+Lfunc_end344:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_to_mut:
+Lfunc_begin345:
+	.cfi_startproc
+	mov x3, x2
+	mov x2, x1
+	ldr x1, [x0]
+	mov x0, x8
+	b bytes::bytes::shared_to_mut_impl
+Lfunc_end345:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_is_unique:
+Lfunc_begin346:
+	.cfi_startproc
+	ldapr x8, [x0]
+	ldr x8, [x8, #16]
+	cmp x8, #1
+	cset w0, eq
+	ret
+Lfunc_end346:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::shared_drop:
+Lfunc_begin347:
+	.cfi_startproc
+	sub sp, sp, #48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	ldr x19, [x0]
+	add x8, x19, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB347_3
+	ldapur xzr, [x19, #16]
+	ldr x8, [x19, #8]
+	tbnz x8, #63, LBB347_4
+	ldr x0, [x19]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	b __rustc::__rdl_dealloc
+LBB347_3:
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	ret
+LBB347_4:
+Lloh3489:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3490:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3491:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3492:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3493:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGE
+Lloh3494:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+	.loh AdrpAdd	Lloh3493, Lloh3494
+	.loh AdrpAdd	Lloh3491, Lloh3492
+	.loh AdrpAdd	Lloh3489, Lloh3490
+Lfunc_end347:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_even_clone:
+Lfunc_begin348:
+	.cfi_startproc
+	mov x5, x2
+	mov x4, x1
+	ldapr x2, [x0]
+	tbnz w2, #0, LBB348_3
+	add x9, x2, #16
+	mov w10, #1
+	ldadd x10, x9, [x9]
+	tbnz x9, #63, LBB348_4
+	stp x5, x2, [x8, #16]
+Lloh3495:
+	adrp x9, bytes::bytes::SHARED_VTABLE@PAGE
+Lloh3496:
+	add x9, x9, bytes::bytes::SHARED_VTABLE@PAGEOFF
+	stp x9, x4, [x8]
+	ret
+LBB348_3:
+	mov x1, x0
+	and x3, x2, #0xfffffffffffffffe
+	mov x0, x8
+	b bytes::bytes::shallow_clone_vec
+LBB348_4:
+	stp x29, x30, [sp, #-16]!
+	mov x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	bl bytes::abort
+	.loh AdrpAdd	Lloh3495, Lloh3496
+Lfunc_end348:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_even_to_vec:
+Lfunc_begin349:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x19, x2
+	mov x2, x1
+	mov x20, x8
+	ldapr x1, [x0]
+	tbnz w1, #0, LBB349_2
+	mov x0, x20
+	mov x3, x19
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	b bytes::bytes::shared_to_vec_impl
+LBB349_2:
+	and x21, x1, #0xfffffffffffffffe
+	sub x8, x2, x21
+	add x22, x8, x19
+	mov x0, x21
+	mov x1, x2
+	mov x2, x19
+	bl _memmove
+	stp x22, x21, [x20]
+	str x19, [x20, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+Lfunc_end349:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_even_to_mut:
+Lfunc_begin350:
+	.cfi_startproc
+	stp x24, x23, [sp, #-64]!
+	stp x22, x21, [sp, #16]
+	stp x20, x19, [sp, #32]
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x19, x2
+	mov x2, x1
+	ldapr x1, [x0]
+	tbnz w1, #0, LBB350_2
+	mov x0, x8
+	mov x3, x19
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	b bytes::bytes::shared_to_mut_impl
+LBB350_2:
+	and x20, x1, #0xfffffffffffffffe
+	subs x9, x2, x20
+	add x21, x9, x19
+	lsr x9, x21, #10
+	clz x9, x9
+	mov w10, #64
+	sub x9, x10, x9
+	mov w10, #7
+	cmp x9, #7
+	csel x9, x9, x10, lo
+	mov w10, #1
+	orr x22, x10, x9, lsl #2
+	subs x23, x2, x20
+	b.eq LBB350_5
+	lsr x9, x23, #59
+	cbnz x9, LBB350_6
+	add x22, x22, x23, lsl #5
+	b LBB350_8
+LBB350_5:
+	mov x19, x21
+	b LBB350_9
+LBB350_6:
+	mov x24, x8
+	mov w0, #40
+	mov w1, #8
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB350_10
+	ubfx x8, x22, #2, #3
+	stp x21, x20, [x0]
+	stp x21, x8, [x0, #16]
+	mov w8, #1
+	mov x22, x0
+	str x8, [x0, #32]
+	mov x8, x24
+LBB350_8:
+	add x20, x20, x23
+	subs x9, x21, x23
+	csel x21, xzr, x9, lo
+LBB350_9:
+	stp x20, x21, [x8]
+	stp x19, x22, [x8, #16]
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	ret
+LBB350_10:
+	mov w0, #8
+	mov w1, #40
+	bl alloc::alloc::handle_alloc_error
+Lfunc_end350:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::promotable_even_drop:
+Lfunc_begin351:
+	.cfi_startproc
+	sub sp, sp, #48
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	ldr x19, [x0]
+	tbnz w19, #0, LBB351_4
+	add x8, x19, #16
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB351_6
+	ldapur xzr, [x19, #16]
+	ldr x8, [x19, #8]
+	tbnz x8, #63, LBB351_8
+	ldr x0, [x19]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	b __rustc::__rdl_dealloc
+LBB351_4:
+	and x0, x19, #0xfffffffffffffffe
+	sub x8, x1, x0
+	cmn x8, x2
+	b.mi LBB351_7
+	mov w1, #1
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	b __rustc::__rdl_dealloc
+LBB351_6:
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	add sp, sp, #48
+	ret
+LBB351_7:
+Lloh3497:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3498:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3499:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3500:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3501:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.27@PAGE
+Lloh3502:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.27@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+LBB351_8:
+Lloh3503:
+	adrp x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGE
+Lloh3504:
+	add x0, x0, l_anon.5b5fbcbb193e27d75e793261e4c0675d.141@PAGEOFF
+Lloh3505:
+	adrp x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGE
+Lloh3506:
+	add x3, x3, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.11@PAGEOFF
+Lloh3507:
+	adrp x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGE
+Lloh3508:
+	add x4, x4, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.53@PAGEOFF
+	add x2, sp, #15
+	mov w1, #43
+	bl core::result::unwrap_failed
+	.loh AdrpAdd	Lloh3501, Lloh3502
+	.loh AdrpAdd	Lloh3499, Lloh3500
+	.loh AdrpAdd	Lloh3497, Lloh3498
+	.loh AdrpAdd	Lloh3507, Lloh3508
+	.loh AdrpAdd	Lloh3505, Lloh3506
+	.loh AdrpAdd	Lloh3503, Lloh3504
+Lfunc_end351:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes_mut::shared_v_clone:
+Lfunc_begin352:
+	.cfi_startproc
+	ldr x9, [x0]
+	add x10, x9, #32
+	mov w11, #1
+	ldadd x11, x10, [x10]
+	tbnz x10, #63, LBB352_2
+	stp x2, x9, [x8, #16]
+Lloh3509:
+	adrp x9, bytes::bytes_mut::SHARED_VTABLE@PAGE
+Lloh3510:
+	add x9, x9, bytes::bytes_mut::SHARED_VTABLE@PAGEOFF
+	stp x9, x1, [x8]
+	ret
+LBB352_2:
+	stp x29, x30, [sp, #-16]!
+	mov x29, sp
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	bl bytes::abort
+	.loh AdrpAdd	Lloh3509, Lloh3510
+Lfunc_end352:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes_mut::shared_v_to_vec:
+Lfunc_begin353:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x20, x2
+	mov x21, x8
+	ldr x19, [x0]
+	ldapur x8, [x19, #32]
+	cmp x8, #1
+	b.ne LBB353_6
+	ldr q0, [x19]
+	str q0, [x21]
+	ldr x8, [x19, #16]
+	str x8, [x21, #16]
+	mov w8, #1
+	stp xzr, x8, [x19]
+	str xzr, [x19, #16]
+	add x8, x19, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB353_5
+	mov x22, x1
+	ldapur xzr, [x19, #32]
+	ldr x8, [x19]
+	cbz x8, LBB353_4
+	ldr x0, [x19, #8]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+LBB353_4:
+	mov x0, x19
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+	mov x1, x22
+LBB353_5:
+	ldr x0, [x21, #8]
+	mov x2, x20
+	bl _memmove
+	str x20, [x21, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB353_6:
+	tbnz x20, #63, LBB353_15
+	cbz x20, LBB353_13
+	mov x22, x1
+	mov x0, x20
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB353_16
+	stp x20, x0, [x21]
+	mov x1, x22
+	mov x2, x20
+	bl _memcpy
+	str x20, [x21, #16]
+	add x8, x19, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB353_14
+LBB353_10:
+	ldapur xzr, [x19, #32]
+	ldr x8, [x19]
+	cbz x8, LBB353_12
+	ldr x0, [x19, #8]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+LBB353_12:
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	b __rustc::__rdl_dealloc
+LBB353_13:
+	mov w8, #1
+	stp xzr, x8, [x21]
+	str xzr, [x21, #16]
+	add x8, x19, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.eq LBB353_10
+LBB353_14:
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB353_15:
+	mov x0, #0
+	mov x1, x20
+	bl alloc::raw_vec::handle_error
+LBB353_16:
+	mov w0, #1
+	mov x1, x20
+	bl alloc::raw_vec::handle_error
+Lfunc_end353:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes_mut::shared_v_to_mut:
+Lfunc_begin354:
+	.cfi_startproc
+	stp x24, x23, [sp, #-64]!
+	stp x22, x21, [sp, #16]
+	stp x20, x19, [sp, #32]
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x19, x2
+	mov x21, x1
+	mov x20, x8
+	ldr x22, [x0]
+	ldapur x8, [x22, #32]
+	cmp x8, #1
+	b.ne LBB354_2
+	ldp x8, x9, [x22]
+	sub x8, x8, x21
+	add x8, x8, x9
+	b LBB354_11
+LBB354_2:
+	tbnz x19, #63, LBB354_12
+	cbz x19, LBB354_6
+	mov x0, x19
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB354_13
+	mov x23, x0
+	mov x1, x21
+	mov x2, x19
+	bl _memcpy
+	mov x21, x23
+	add x8, x22, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.eq LBB354_7
+	b LBB354_10
+LBB354_6:
+	mov w21, #1
+	add x8, x22, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB354_10
+LBB354_7:
+	ldapur xzr, [x22, #32]
+	ldr x8, [x22]
+	cbz x8, LBB354_9
+	ldr x0, [x22, #8]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+LBB354_9:
+	mov x0, x22
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+LBB354_10:
+	lsr x8, x19, #10
+	clz x8, x8
+	mov w9, #64
+	sub x8, x9, x8
+	mov w9, #7
+	cmp x8, #7
+	csel x8, x8, x9, lo
+	mov w9, #1
+	orr x22, x9, x8, lsl #2
+	mov x8, x19
+LBB354_11:
+	stp x21, x19, [x20]
+	stp x8, x22, [x20, #16]
+	ldp x29, x30, [sp, #48]
+	ldp x20, x19, [sp, #32]
+	ldp x22, x21, [sp, #16]
+	ldp x24, x23, [sp], #64
+	ret
+LBB354_12:
+	mov x0, #0
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+LBB354_13:
+	mov w0, #1
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+Lfunc_end354:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes_mut::shared_v_is_unique:
+Lfunc_begin355:
+	.cfi_startproc
+	ldapr x8, [x0]
+	ldr x8, [x8, #32]
+	cmp x8, #1
+	cset w0, eq
+	ret
+Lfunc_end355:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes_mut::shared_v_drop:
+Lfunc_begin356:
+	.cfi_startproc
+	stp x20, x19, [sp, #-32]!
+	stp x29, x30, [sp, #16]
+	add x29, sp, #16
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	ldr x19, [x0]
+	add x8, x19, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB356_4
+	ldapur xzr, [x19, #32]
+	ldr x8, [x19]
+	cbz x8, LBB356_3
+	ldr x0, [x19, #8]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+LBB356_3:
+	mov x0, x19
+	mov w1, #8
+	ldp x29, x30, [sp, #16]
+	ldp x20, x19, [sp], #32
+	b __rustc::__rdl_dealloc
+LBB356_4:
+	ldp x29, x30, [sp, #16]
+	ldp x20, x19, [sp], #32
+	ret
+Lfunc_end356:
+	.cfi_endproc
+
+	.p2align	2
+bytes::panic_advance:
+Lfunc_begin357:
+	.cfi_startproc
+	sub sp, sp, #48
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	add x8, x0, #8
+Lloh3511:
+	adrp x9, <u64 as core::fmt::Display>::fmt@PAGE
+Lloh3512:
+	add x9, x9, <u64 as core::fmt::Display>::fmt@PAGEOFF
+	stp x8, x9, [sp]
+	stp x0, x9, [sp, #16]
+Lloh3513:
+	adrp x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.6@PAGE
+Lloh3514:
+	add x0, x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.6@PAGEOFF
+Lloh3515:
+	adrp x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.8@PAGE
+Lloh3516:
+	add x2, x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.8@PAGEOFF
+	mov x1, sp
+	bl core::panicking::panic_fmt
+	.loh AdrpAdd	Lloh3515, Lloh3516
+	.loh AdrpAdd	Lloh3513, Lloh3514
+	.loh AdrpAdd	Lloh3511, Lloh3512
+Lfunc_end357:
+	.cfi_endproc
+
+	.p2align	2
+bytes::panic_does_not_fit:
+Lfunc_begin358:
+	.cfi_startproc
+	sub sp, sp, #64
+	stp x29, x30, [sp, #48]
+	add x29, sp, #48
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	stp x0, x1, [sp]
+Lloh3517:
+	adrp x8, <u64 as core::fmt::Display>::fmt@PAGE
+Lloh3518:
+	add x8, x8, <u64 as core::fmt::Display>::fmt@PAGEOFF
+	mov x9, sp
+	stp x9, x8, [sp, #16]
+	add x9, sp, #8
+	stp x9, x8, [sp, #32]
+Lloh3519:
+	adrp x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.9@PAGE
+Lloh3520:
+	add x0, x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.9@PAGEOFF
+Lloh3521:
+	adrp x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.10@PAGE
+Lloh3522:
+	add x2, x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.10@PAGEOFF
+	add x1, sp, #16
+	bl core::panicking::panic_fmt
+	.loh AdrpAdd	Lloh3521, Lloh3522
+	.loh AdrpAdd	Lloh3519, Lloh3520
+	.loh AdrpAdd	Lloh3517, Lloh3518
+Lfunc_end358:
+	.cfi_endproc
+
+	.p2align	2
+<bytes::bytes::Bytes>::copy_from_slice:
+Lfunc_begin359:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x19, x0
+	cbz x2, LBB359_4
+	mov x20, x2
+	mov x22, x1
+	mov x0, x2
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB359_6
+	mov x21, x0
+	mov x1, x22
+	mov x2, x20
+	bl _memcpy
+	tbnz w21, #0, LBB359_5
+	orr x8, x21, #0x1
+	stp x21, x20, [x19, #8]
+	str x8, [x19, #24]
+Lloh3523:
+	adrp x8, bytes::bytes::PROMOTABLE_EVEN_VTABLE@PAGE
+Lloh3524:
+	add x8, x8, bytes::bytes::PROMOTABLE_EVEN_VTABLE@PAGEOFF
+	str x8, [x19]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB359_4:
+	mov w8, #1
+	stp xzr, xzr, [x19, #16]
+	str x8, [x19, #8]
+Lloh3525:
+	adrp x8, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.5@PAGE
+Lloh3526:
+	add x8, x8, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.5@PAGEOFF
+	str x8, [x19]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB359_5:
+	stp x21, x20, [x19, #8]
+Lloh3527:
+	adrp x8, bytes::bytes::PROMOTABLE_ODD_VTABLE@PAGE
+Lloh3528:
+	add x8, x8, bytes::bytes::PROMOTABLE_ODD_VTABLE@PAGEOFF
+	str x21, [x19, #24]
+	str x8, [x19]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB359_6:
+	mov w0, #1
+	mov x1, x20
+	bl alloc::raw_vec::handle_error
+	.loh AdrpAdd	Lloh3523, Lloh3524
+	.loh AdrpAdd	Lloh3525, Lloh3526
+	.loh AdrpAdd	Lloh3527, Lloh3528
+Lfunc_end359:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::static_clone.1040:
+Lfunc_begin360:
+	.cfi_startproc
+	stp x2, xzr, [x8, #16]
+Lloh3529:
+	adrp x9, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.5@PAGE
+Lloh3530:
+	add x9, x9, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.5@PAGEOFF
+	stp x9, x1, [x8]
+	ret
+	.loh AdrpAdd	Lloh3529, Lloh3530
+Lfunc_end360:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::static_to_vec:
+Lfunc_begin361:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x19, x2
+	tbnz x2, #63, LBB361_5
+	mov x20, x8
+	cbz x19, LBB361_4
+	mov x21, x1
+	mov x0, x19
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB361_6
+	stp x19, x0, [x20]
+	mov x1, x21
+	mov x2, x19
+	bl _memcpy
+	str x19, [x20, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB361_4:
+	mov w8, #1
+	stp xzr, x8, [x20]
+	str xzr, [x20, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB361_5:
+	mov x0, #0
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+LBB361_6:
+	mov w0, #1
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+Lfunc_end361:
+	.cfi_endproc
+
+	.p2align	2
+bytes::bytes::static_to_mut:
+Lfunc_begin362:
+	.cfi_startproc
+	stp x22, x21, [sp, #-48]!
+	stp x20, x19, [sp, #16]
+	stp x29, x30, [sp, #32]
+	add x29, sp, #32
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	mov x19, x2
+	mov x20, x8
+	cbz x2, LBB362_3
+	mov x22, x1
+	mov x0, x19
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB362_5
+	mov x21, x0
+	mov x1, x22
+	mov x2, x19
+	bl _memcpy
+	b LBB362_4
+LBB362_3:
+	mov w21, #1
+LBB362_4:
+	lsr x8, x19, #10
+	clz x8, x8
+	mov w9, #64
+	sub x8, x9, x8
+	mov w9, #7
+	cmp x8, #7
+	csel x8, x8, x9, lo
+	mov w9, #1
+	stp x21, x19, [x20]
+	orr x8, x9, x8, lsl #2
+	stp x19, x8, [x20, #16]
+	ldp x29, x30, [sp, #32]
+	ldp x20, x19, [sp, #16]
+	ldp x22, x21, [sp], #48
+	ret
+LBB362_5:
+	mov w0, #1
+	mov x1, x19
+	bl alloc::raw_vec::handle_error
+Lfunc_end362:
+	.cfi_endproc
+
+	.p2align	2
+<bytes::bytes_mut::BytesMut>::reserve_inner:
+Lfunc_begin363:
+	.cfi_startproc
+	sub sp, sp, #96
+	stp x24, x23, [sp, #32]
+	stp x22, x21, [sp, #48]
+	stp x20, x19, [sp, #64]
+	stp x29, x30, [sp, #80]
+	add x29, sp, #80
+	.cfi_def_cfa w29, 16
+	.cfi_offset w30, -8
+	.cfi_offset w29, -16
+	.cfi_offset w19, -24
+	.cfi_offset w20, -32
+	.cfi_offset w21, -40
+	.cfi_offset w22, -48
+	.cfi_offset w23, -56
+	.cfi_offset w24, -64
+	mov x19, x0
+	ldr x2, [x0, #8]
+	ldr x20, [x0, #24]
+	tbnz w20, #0, LBB363_8
+	adds x8, x2, x1
+	b.hs LBB363_27
+	ldapur x9, [x20, #32]
+	cmp x9, #1
+	b.ne LBB363_13
+	ldr x21, [x20, #8]
+	ldr x1, [x19]
+	sub x22, x1, x21
+	adds x10, x22, x8
+	b.hs LBB363_29
+	ldr x9, [x20]
+	cmp x9, x10
+	b.hs LBB363_11
+	cmp x9, x8
+	ccmp x22, x2, #0, hs
+	b.hs LBB363_26
+	lsl x8, x9, #1
+	cmp x10, x8
+	csel x8, x10, x8, hi
+	add x1, x22, x2
+	sub x2, x8, x1
+	str x1, [x20, #16]
+	sub x8, x9, x1
+	cmp x2, x8
+	b.hi LBB363_30
+LBB363_7:
+	add x8, x21, x22
+	str x8, [x19]
+	sub x8, x9, x22
+	b LBB363_11
+LBB363_8:
+	lsr x21, x20, #5
+	ldr x10, [x19, #16]
+	add x22, x10, x21
+	sub x8, x22, x2
+	cmp x21, x2
+	ccmp x8, x1, #0, hs
+	b.hs LBB363_12
+	ldr x8, [x19]
+	sub x9, x8, x21
+	add x8, x21, x2
+	stp x22, x9, [sp, #8]
+	str x8, [sp, #24]
+	sub x10, x10, x2
+	cmp x1, x10
+	b.hi LBB363_28
+LBB363_10:
+	add x8, x9, x21
+	str x8, [x19]
+	sub x8, x22, x21
+LBB363_11:
+	str x8, [x19, #16]
+	ldp x29, x30, [sp, #80]
+	ldp x20, x19, [sp, #64]
+	ldp x22, x21, [sp, #48]
+	ldp x24, x23, [sp, #32]
+	add sp, sp, #96
+	ret
+LBB363_12:
+	ldr x1, [x19]
+	sub x21, x1, x21
+	mov x0, x21
+	bl _memcpy
+	str x21, [x19]
+	and x8, x20, #0x1f
+	stp x22, x8, [x19, #16]
+	ldp x29, x30, [sp, #80]
+	ldp x20, x19, [sp, #64]
+	ldp x22, x21, [sp, #48]
+	ldp x24, x23, [sp, #32]
+	add sp, sp, #96
+	ret
+LBB363_13:
+	ldr x23, [x20, #24]
+	add w9, w23, #9
+	mov w10, #1
+	lsl x9, x10, x9
+	cmp x9, x8
+	csel x9, x9, x8, hi
+	cmp x23, #0
+	csel x21, x8, x9, eq
+	tbnz x21, #63, LBB363_31
+	cbz x21, LBB363_24
+	mov x0, x21
+	mov w1, #1
+	bl __rustc::__rdl_alloc
+	cbz x0, LBB363_32
+	stp x21, x0, [sp, #8]
+	str xzr, [sp, #24]
+	ldp x1, x22, [x19]
+	cmp x22, x21
+	b.hi LBB363_25
+LBB363_17:
+	mov x21, #0
+	mov x8, #0
+	cbz x22, LBB363_19
+LBB363_18:
+	add x0, x0, x21
+	mov x2, x22
+	bl _memcpy
+	mov x8, x21
+LBB363_19:
+	add x8, x8, x22
+	str x8, [sp, #24]
+	add x8, x20, #32
+	mov x9, #-1
+	ldaddl x9, x8, [x8]
+	cmp x8, #1
+	b.ne LBB363_23
+	ldapur xzr, [x20, #32]
+	ldr x8, [x20]
+	cbz x8, LBB363_22
+	ldr x0, [x20, #8]
+	mov w1, #1
+	bl __rustc::__rdl_dealloc
+LBB363_22:
+	mov x0, x20
+	mov w1, #8
+	bl __rustc::__rdl_dealloc
+LBB363_23:
+	mov w8, #1
+	ldp x10, x9, [sp, #8]
+	orr x8, x8, x23, lsl #2
+	str x9, [x19]
+	stp x10, x8, [x19, #16]
+	ldp x29, x30, [sp, #80]
+	ldp x20, x19, [sp, #64]
+	ldp x22, x21, [sp, #48]
+	ldp x24, x23, [sp, #32]
+	add sp, sp, #96
+	ret
+LBB363_24:
+	mov w0, #1
+	stp x21, x0, [sp, #8]
+	str xzr, [sp, #24]
+	ldp x1, x22, [x19]
+	cmp x22, x21
+	b.ls LBB363_17
+LBB363_25:
+	add x0, sp, #8
+	mov x21, x1
+	mov x1, #0
+	mov x2, x22
+	bl <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+	mov x1, x21
+	ldp x0, x21, [sp, #16]
+	b LBB363_18
+LBB363_26:
+	mov x0, x21
+	bl _memcpy
+	str x21, [x19]
+	ldr x8, [x20]
+	b LBB363_11
+LBB363_27:
+Lloh3531:
+	adrp x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.21@PAGE
+Lloh3532:
+	add x0, x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.21@PAGEOFF
+Lloh3533:
+	adrp x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.24@PAGE
+Lloh3534:
+	add x2, x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.24@PAGEOFF
+	mov w1, #17
+	bl core::panicking::panic_fmt
+LBB363_28:
+	add x0, sp, #8
+	mov x2, x1
+	mov x1, x8
+	bl <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+	ldp x22, x9, [sp, #8]
+	b LBB363_10
+LBB363_29:
+Lloh3535:
+	adrp x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.21@PAGE
+Lloh3536:
+	add x0, x0, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.21@PAGEOFF
+Lloh3537:
+	adrp x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.23@PAGE
+Lloh3538:
+	add x2, x2, l_anon.0d99dfb52e7fbf145f5d0ebcac105794.23@PAGEOFF
+	mov w1, #17
+	bl core::panicking::panic_fmt
+LBB363_30:
+	mov x0, x20
+	bl <alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>
+	ldp x9, x21, [x20]
+	b LBB363_7
+LBB363_31:
+	mov x0, #0
+	mov x1, x21
+	bl alloc::raw_vec::handle_error
+LBB363_32:
+	mov w0, #1
+	mov x1, x21
+	bl alloc::raw_vec::handle_error
+	.loh AdrpAdd	Lloh3533, Lloh3534
+	.loh AdrpAdd	Lloh3531, Lloh3532
+	.loh AdrpAdd	Lloh3537, Lloh3538
+	.loh AdrpAdd	Lloh3535, Lloh3536

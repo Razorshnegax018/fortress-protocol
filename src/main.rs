@@ -82,8 +82,17 @@ fn main() -> tokio::io::Result<()> {
         Ok(()) }); 
     
     let _another_peer_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
+
+        std::thread::sleep(Duration::from_millis(1200));
         
-        let _ = create_peer_node("127.0.0.1:6276"); Ok(())
+        let _ = create_peer_node("127.0.0.1:3824"); Ok(())
+    });
+
+    let _third_peer: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
+
+        std::thread::sleep(Duration::from_millis(2000));
+
+        let _ = create_peer_node("127.0.0.1:2749"); Ok(())
     });
 
     // Wait for the threads to prevent main from exiting immediately

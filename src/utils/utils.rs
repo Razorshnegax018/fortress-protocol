@@ -66,10 +66,12 @@ where Writer: AsyncWriteExt + Unpin {
 	};
 
     // serialize into bytes using the pool
-    let send_packet = serialize_into(pool, &packet);
+    pool.clear(); let send_packet = serialize_into(pool, &packet);
 
     // send the ConnectionPacket
-    socket.send(send_packet.freeze()).await?; Ok(())
+    socket.send(send_packet.freeze()).await?; socket.flush().await?;
+
+    Ok(())
 }
 
 /// @util waits for signed prepare votes and commit certs from reader task until pBFT quorum of 2f + 1

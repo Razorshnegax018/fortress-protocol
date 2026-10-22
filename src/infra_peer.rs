@@ -6,7 +6,6 @@ use std::sync::atomic::Ordering::Relaxed;
 use std::thread::JoinHandle;
 use std::time::Duration;
 use arrayvec::ArrayVec;
-use bincode::deserialize;
 use gdt_cpus::ThreadPriority::Highest;
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::runtime::Handle;
@@ -29,6 +28,7 @@ use crate::{
 
 use rand::rngs::OsRng;
 use ed25519_dalek::{Signer, SigningKey};
+use tokio::io::AsyncReadExt;
 
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 
@@ -52,19 +52,20 @@ pub type SocketFramed = Framed<OwnedWriteHalf, LengthDelimitedCodec>;
 pub async fn discover_network(port: &str) -> io::Result<()> {
     let address_list: [SocketAddr; 16] = [DEFAULT_ADDR; 16]; let ids: [u8; 16] = [u8::MAX; 16];
 
+    let active_ids: ArrayVec<u8, 16> = ArrayVec::new();
     let active_indexes: ArrayVec<usize, 16> = ArrayVec::new();
 
     // create the struct for tools for consensus
     let mut tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
-        registry: [const { None }; 16], address_list, ids, active_indexes, len: 0, next_id: 0 };
+        registry: [const { None }; 16], address_list, active_ids,
+        ids, active_indexes, len: 0, next_id: 0 };
 
     // leader socket that may or may not exist
     let mut leader_socket = false;
 
     // grab the port from the cmdline
     // let Some(port) = std::env::args().nth(1) else { panic!("invalid port") };
-    let self_address = port;
-    let mut self_id: u8 = 0;
+    let self_address = port; let mut self_id: u8 = 255;
 
     // general use serialize pool
     let mut serialize_pool = BytesMut::with_capacity(1024);
@@ -92,17 +93,35 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
             Some(&self_pubkey), 0, &mut socket_framed, &mut serialize_pool).await?;
 
         // get your node ID from the bootnode
-        if let Some(Ok(mut value)) = socket_framed.next().await {
-            self_id = value.get_u8();
+        /* let mut recieve_buf = Vec::with_capacity(684);
+        let mut socket = socket_framed.into_parts();
+
+        let bytes_read = socket.io.read_buf(&mut recieve_buf).await?;
+
+        if bytes_read == 0 { return return_err("nigga") } else { self_id = recieve_buf[0]; } */
+
+
+        match socket_framed.next().await {
+            Some(Ok(mut value)) => {
+                if value.is_empty() { println!("ok dude why is this empty"); return return_err(""); }
+                self_id = value.get_u8();
+            },
+
+            Some(Err(e)) => { println!("Error: {}", e); }
+
+            None => { println!("socket closed"); }
         }
+
+        // let mut socket_framed = make_framed(socket.io, 1024);
 
         // if deserialization of the connection packet from the bootnode fails,
         // log the error and skip the packet
         if let Some(Ok(value)) = socket_framed.next().await {
             if let Ok(list) = deserialize_packet::<Vec<ConnectionPacket>>(&value) {
                 for packet in list {
-                    // connect to peer 
-                    match TcpStream::connect(std::str::from_utf8(&packet.address).unwrap()).await {
+                    // connect to peer
+                    let Ok(peer_addr) = std::str::from_utf8(&packet.address) else { continue; };
+                    match TcpStream::connect(peer_addr).await {
 
                         // we need to spawn reader tasks for each of the sockets the bootnode gave us
                         Ok(stream) => { 
@@ -118,7 +137,7 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
 
                             // 1) send a pubkey confirmation packet to peer
                             if let Err(_) = send_connection_packet("peer-pubkey", &self_address,
-                                Some(&self_pubkey), SELF_ID.load(Relaxed), &mut write_framed, &mut serialize_pool).await {
+                                Some(&self_pubkey), self_id, &mut write_framed, &mut serialize_pool).await {
                                 eprintln!("Peer failed to connect to another peer"); todo!()
 
                                 // TODO: Implement retry logic
@@ -127,7 +146,8 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
                             let addr: SocketAddr = io_err(str::from_utf8(packet.address).unwrap().parse())?;
 
                             // 2) add the writer into the registry
-                            let _ = tools.insert_socket(write_framed, addr, packet.node_id);
+                            if let Err(_) = tools.insert_socket(write_framed, addr, packet.node_id) {
+                                eprintln!("Peer failed to insert socket for new peer"); }
 
                             // 2b) - if it's the leader node, then store their ID
                             if packet.node_type == b"leader" {
@@ -142,7 +162,6 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
 
                             // 4) then, for each reader, spawn a new reader task
                             tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
-
                         },
                         Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*self_address); }
                     }
@@ -429,7 +448,7 @@ pub async fn peer_consensus_engine(
 
     tokio::select! {
         _ = wait_for_quorum(vote_receiver, sequence_counters, &mut quorum_counter, 
-                 tools.len, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
+            tools.len, faulty, b"PREPARE") => { println!("Prepare quorum has been reached"); }
 
         _ = &mut sleep => { return return_err("Time limit exceeded, prepare verification failed"); }
     }
@@ -468,7 +487,7 @@ pub async fn peer_consensus_engine(
     // peer needs to use the static thread local cell
     tools.sequence_counter += 1;
 
-    println!("Consensus has been reached");
+    println!("Consensus has been reached with id {}", self_id);
     
 
     Ok(())

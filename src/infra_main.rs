@@ -43,18 +43,45 @@ pub struct ClientTransaction<'a> {
  (view number, sequence counter, registry) into single struct */
 pub struct ConsensusToolsStruct {
     pub sequence_counter: u32, pub view_number: u32, pub registry: PeerRegistry,
-    pub address_list: [SocketAddr; 16], pub len: usize, pub ids: [u8; 16],
-    pub next_id: u8, pub active_indexes: ArrayVec<usize, 16>
+    pub address_list: [SocketAddr; 16], pub len: usize, pub ids: [u8; 16], pub next_id: u8,
+    pub active_ids: ArrayVec<u8, 16>, pub active_indexes: ArrayVec<usize, 16>
 }
 
 // @impl methods to handle adding, deleting, and looking up sockets
 impl ConsensusToolsStruct {
-    #[inline]
+
+    // use simd to check the entire array at once for the target id
+    #[inline(always)]
     pub fn find_index(&self, target_id: u8) -> Option<usize> {
-        // on --release compiler optimizations, compiler auto-vectorizes this
-        // into a single 128-bit simd register comparison because ids is exactly 128 bits
-        self.ids.iter().position(|&id| id == target_id)
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            use std::arch::aarch64::*;
+            use std::mem::transmute;
+
+            // 1) load self.ids array into 128-bit vector register, get back a reg ptr
+            let ids_reg = vld1q_u8(self.ids.as_ptr());
+
+            // 2) duplicate the target id 16 times and load the array into another 128-bit reg
+            let target_id_reg = vdupq_n_u8(target_id);
+
+            // 3) compare the two registers - 0xFF byte on match, 0x00 byte on mismatch
+            let cmp = vceqq_u8(ids_reg, target_id_reg);
+
+            // 4) transmute result so we can work with it as an integer
+            let mask: u128 = transmute(cmp);
+
+            // if the entire thing is zero there's no match
+            if mask != 0 {
+                // trailing_zeros() counts the number of bits until the matching byte
+                // dividing by 8 gives us the byte index of the matching byte
+                Some((mask.trailing_zeros() / 8) as usize)
+            } else { None }
+        }
+
+        #[cfg(not(target_arch = "aarch64"))]
+        { self.ids.iter().position(|&id| id == target_id) }
     }
+
 
     /// adds a new socket to the registry
     pub fn insert_socket(&mut self, socket: SocketFramed, addr: SocketAddr, id: u8) -> Result<u8, SocketFramed> {
@@ -72,6 +99,9 @@ impl ConsensusToolsStruct {
         self.registry[idx] = Some(socket);
 
         // add the id to the "active-ids" list
+        self.active_ids.push(id);
+
+        // add the index to the "active-indexes" list
         self.active_indexes.push(idx);
 
         // increment the registry length and next-id parameter
@@ -90,7 +120,9 @@ impl ConsensusToolsStruct {
         let Some(id_idx) = self.active_indexes.iter().position(|&id| id == target_id as usize) 
             else { eprintln!("Target ID to remove does not exist in list"); return None };
 
-        // remove the socket's id from the active id array
+
+        // remove the socket's id and index from each active array
+        self.active_ids.remove(id_idx);
         self.active_indexes.remove(id_idx);
 
         // remove the socket from the registry and replace it with none
@@ -137,7 +169,7 @@ pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: SocketAdd
 
 /// Structure that the leader node uses to communicate with the bootnode
 #[derive(Serialize, Deserialize)]
-pub struct RegistryUpdate { pub addrs: [SocketAddr; 16], pub ids: [u8; 16] }
+pub struct RegistryUpdate<'a> { pub addrs: [SocketAddr; 16], pub ids: &'a [u8] }
 
 pub static DEFAULT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
@@ -147,11 +179,13 @@ pub static DEFAULT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPE
 pub async fn start_server() -> io::Result<()> {
     let address_list: [SocketAddr; 16] = [DEFAULT_ADDR; 16]; let ids: [u8; 16] = [u8::MAX; 16];
 
+    let active_ids: ArrayVec<u8, 16> = ArrayVec::new();
     let active_indexes: ArrayVec<usize, 16> = ArrayVec::new();
 
     let listener = TcpListener::bind(ADDRESS).await?;
     let tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
-        registry: [const { None }; 16], address_list, ids, active_indexes, len: 0, next_id: 0 };
+        registry: [const { None }; 16], address_list, ids,
+        active_ids, active_indexes, len: 0, next_id: 0 };
 
     println!("Server started at {}", ADDRESS);
 
@@ -204,7 +238,7 @@ pub async fn start_server() -> io::Result<()> {
 
     // create a buffer to store the result from the select
     let mut network_buffer: Option<Result<BytesMut, io::Error>>;
-    while let Ok((socket, addr)) = listener.accept().await {
+    while let Ok((socket, _)) = listener.accept().await {
         println!("Peer node  connected to primary");
 
         let (read_socket, write_socket) = socket.into_split();
@@ -234,6 +268,7 @@ pub async fn start_server() -> io::Result<()> {
             tokio::task::spawn(reader_task(read_framed, _peer_tx, Box::from(pubkey_packet.payload))); 
 
             // send a registration request to the consensus engine receiver to register the write half
+            let addr: SocketAddr = io_err(std::str::from_utf8(&pubkey_packet.address).unwrap().parse())?;
             let request = RegistrationRequest { socket: write_socket, addr, node_id: pubkey_packet.node_id };
 
             io_err(registration_tx.send(request).await)?;
@@ -277,7 +312,8 @@ pub async fn leader_consensus_actor(
          0, &mut bootnode_framed, &mut serialize_pool).await 
             { eprintln!("Could not register leader address with bootnode") }
     
-    // TODO - The bootnode will send back the leader node's ID. Handle it
+    // TODO - apparently this value also is length 85 instead of...1.
+    //  add a sleep between sending the leader ID and whatever else you send it
     if let Some(Ok(mut value)) = bootnode_framed.next().await {
         // we want to make sure that our ID timeline is in sync with the bootnode
         tools.next_id = value.get_u8();
@@ -311,13 +347,15 @@ pub async fn leader_consensus_actor(
                 eprintln!("Could not insert socket for registration"); continue;
             }
 
+            println!("given ID: {:?}", request.node_id);
+
             // construct the registry update packet
-            let registry_update = RegistryUpdate { addrs: tools.address_list, ids: tools.ids };
+            let updated_registry = RegistryUpdate { addrs: tools.address_list, ids: tools.active_ids.as_ref() };
 
             // serialize the addresses into the heap buffer
-            let addr_packet = serialize_into(&mut serialize_pool, &registry_update);
+            let addr_packet = serialize_into(&mut serialize_pool, &updated_registry);
 
-            // send the entire list as a serialized Vec<SocketAddr>
+            // send the entire list as a serialized Vec<UpdatedRegistry>
             let _ = bootnode_framed.send(addr_packet.freeze()).await;
         }
     } }

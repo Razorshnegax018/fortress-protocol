@@ -9,6 +9,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 
 use std::cell::Cell;
+use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
 use crate::{infra_main::RegistryUpdate, infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
 use crate::utils::utils::send_connection_packet;
@@ -59,11 +60,11 @@ pub async fn start_bootnode() {
 
 			// deserialize addr list and clear out old addresses from write lock
 			let Ok(update_struct) = deserialize_packet::<RegistryUpdate>(&addr_list) 
-				else { eprintln!("leader sent bad addr list"); continue; }; write_lock.clear();
+				else { eprintln!("leader sent bad addr list"); continue; }; write_lock.truncate(1);
 
 			// while there are still address bytes in the network buffer
 			// copy the entire value from the network into the list buffer
-			for idx in 0..update_struct.addrs.len() {
+			for idx in 0..update_struct.ids.len() {
 				// grab the address and the id
 				let addr = update_struct.addrs[idx];
 				let id = update_struct.ids[idx];
@@ -77,7 +78,7 @@ pub async fn start_bootnode() {
 
 				// make the connection packet for storage (simply re-attach the given node id)
 				let packet = StoragePacket {
-					node_type: b"client", address: Bytes::copy_from_slice(&ip), 
+					node_type: b"peer", address: Bytes::copy_from_slice(&ip),
 					payload: Bytes::new(), node_id: id };
 
 				// extend the list with the new connection packet
@@ -85,7 +86,7 @@ pub async fn start_bootnode() {
 			}
 
 			// updated list - toggle updated list flag
-			UPDATED_LIST.with(|toggle| toggle.set(true))
+			UPDATED_LIST.set(true);
 		}
 
 		// DEBUGGING 
@@ -107,7 +108,7 @@ pub async fn start_bootnode() {
 		println!("Bootnode waiting for new nodes to join...");
 
 		// create a reusable timeout timer
-		let sleep = tokio::time::sleep(Duration::from_millis(500));
+		let sleep = tokio::time::sleep(Duration::from_millis(1700));
 
 		tokio::pin!(sleep);
 
@@ -146,7 +147,7 @@ pub async fn start_bootnode() {
 							// but I see no reason to do that over sending a u8
 
 							socket_framed.send(Bytes::copy_from_slice(&[NODE_ID_COUNTER.get()])).await?;
-							/* 
+							/*
 							if let Err(_) = send_connection_packet("bootnode", BOOTNODE_ADDRESS, None,
 								NODE_ID_COUNTER.get(), &mut socket_framed, &mut send_pool).await {
 								eprintln!("Failed to send connection packet to leader node "); continue;
@@ -186,12 +187,24 @@ pub async fn start_bootnode() {
 						}
 
 						// For now, just send the ID as an u8 first without standardizing it.
-						socket_framed.send(Bytes::copy_from_slice(&[NODE_ID_COUNTER.get()])).await?;
+						let mut given_peer_id: Vec<u8> = Vec::new(); given_peer_id.push(NODE_ID_COUNTER.get());
+						socket_framed.send(Bytes::from(given_peer_id)).await?;
+
+						reset_timer(&mut sleep, 750);sleep.as_mut().await;
+
+
+						/* if let Err(_) = send_connection_packet("bootnode", BOOTNODE_ADDRESS, None,
+							NODE_ID_COUNTER.get(), &mut socket_framed, &mut send_pool).await {
+							eprintln!("Failed to send connection packet to peer node "); continue;
+						} */
+
+						let value = NODE_ID_COUNTER.get();
 
 						// if the registry has been updated, rebuild the payload
 						UPDATED_LIST.with(|updated| { if updated.get() {
 								// clear out the old payload/address list and reserve enough space in it
 								payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
+								println!("is should run this three times, each time with growing list len: {}", list.len());
 
 								// serialize the address list into the payload
 								bincode::serialize_into((&mut payload).writer(), list).unwrap();
@@ -199,10 +212,11 @@ pub async fn start_bootnode() {
 						});
 						
 						// send the full address list to the client alongside the assigned ID
+						println!("payload length: {}", payload.len());
 						if let Err(_) = socket_framed.send(payload.clone().freeze()).await {
 							eprintln!("Failed to send response to connecting peer node"); continue; }
 
-						// TODO - Send Peer node ID
+						NODE_ID_COUNTER.set(NODE_ID_COUNTER.get() + 1);
 
 						println!("List sent to addr");
 					}, _ => { eprintln!("Bootnode received bad packet"); continue; }

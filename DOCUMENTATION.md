@@ -1,5 +1,25 @@
 ### Journey documentation
 
+- Oct 20th
+  - I have never seen such a collection of bugs before in my life. The fact that these are memory bugs are making me question my basic competency
+
+  - Peer nodes panicking on the section where the bootnode sends them their ID, saying the read buffer is empty. I break into the debugger and find that the read buffer indeed has a length and capacity of 0...but an actual internal vec length of varying lengths, from 51 to 88 to 600+
+  
+  - Naturally I decided that the bytes crate had lost its mind and strip out framed, next, and bytes from the code, using TCPstream and a vec. Back to basics. Except that while the first two peer nodes get their IDs correctly 
+
+  - Looking at the byte dump from the values read from the socket, it seemed like it was repeating the word "leader" over and over again, but alas, as I am an illiterate pleb who cannot read utf8 binary, it was repeating the word "client"
+	- regardless, this gave me two things: 1) a suspicion that the 
+
+  - Claude suggests putting the framing back, that I'm experiencing a TCP issue Framed<T> was built to solve. Instead of trying something obviously wrong, I follow the TCP line of thinking and put the bootnode task to rest for a 250ms between sending the ID and sending the address list - it seem
+
+  - And apparently these nodes are able to reach consensus without ever connecting to each other. The leader knows the three other peers exist, and each of the peers know the leader exist, and nothing more. This is because the bootnode is indeed not sending a full address list
+  
+  - The bootnode is also looping through 14 empty ids. choose if you want it to branch on every loop to see if it's empty, or keep active ids and send that to the bootnode
+  - Then there was a another bug where I had TWO self ID variables, and was sending the wrong one to the leader, so the leader was just having a registry filled with node id 0's
+  - So apparently during debugging it's possible for peers not to respond to the bootnode on time, even though they show as registered with the leader (might not be the same peer, I have to check)
+  - it was because of timing, because the nodes were pining the bootnode too fast to the 
+  - Only 1-2 peer nodes have the full registry, the other 1-2 still have only the leader
+
 - Oct 18th
 	- Lots of code written to *fix* the NodeID structure, because the implementation that was written earlier was wrong, had a bug. We need to maintain a seperate list called "active-ids" and then iterate through *that* so that we don't iterate over and unrwap any hole in the old 0..tools.len
       - Another bug was bootnode NODE_ID_COUNTER double counting, and 
