@@ -8,9 +8,9 @@
   - Naturally I decided that the bytes crate had lost its mind and strip out framed, next, and bytes from the code, using TCPstream and a vec. Back to basics. Except that while the first two peer nodes get their IDs correctly 
 
   - Looking at the byte dump from the values read from the socket, it seemed like it was repeating the word "leader" over and over again, but alas, as I am an illiterate pleb who cannot read utf8 binary, it was repeating the word "client"
-	- regardless, this gave me two things: 1) a suspicion that the 
+	- regardless, this gave me a suspicion that the bootnode was sending the entire registry alongside the ID, smashing the two sends together
 
-  - Claude suggests putting the framing back, that I'm experiencing a TCP issue Framed<T> was built to solve. Instead of trying something obviously wrong, I follow the TCP line of thinking and put the bootnode task to rest for a 250ms between sending the ID and sending the address list - it seem
+  - There's the idea of putting the framing back, that I'm experiencing a framing TCP issue Framed<T> was built to solve. Instead of trying something obviously wrong, I put the bootnode task to rest for a 250ms between sending the ID and sending the address list - it seem
 
   - And apparently these nodes are able to reach consensus without ever connecting to each other. The leader knows the three other peers exist, and each of the peers know the leader exist, and nothing more. This is because the bootnode is indeed not sending a full address list
   
@@ -22,7 +22,7 @@
 
 - Oct 18th
 	- Lots of code written to *fix* the NodeID structure, because the implementation that was written earlier was wrong, had a bug. We need to maintain a seperate list called "active-ids" and then iterate through *that* so that we don't iterate over and unrwap any hole in the old 0..tools.len
-      - Another bug was bootnode NODE_ID_COUNTER double counting, and 
+      - Another bug was bootnode NODE_ID_COUNTER double counting
 	- Also removed the separate "leader socket" variable from the peer nodes so that we don't have to manage that variable across different functions, peer node keeps the leader's ID as a global static atomic
     -  Big moves made on view change, added a payload field to PeerVote so it can carry around view number and seq counter, 
 
