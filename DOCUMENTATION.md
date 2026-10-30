@@ -1,5 +1,32 @@
 ### Journey documentation
 
+- Oct 30th
+  - Yes, this entire time has been spent fixing a various bugs instead of working on view change
+  - Summary of changes: 
+    - fixed the peers unable to connect to each other bug because of corrupted addresses
+    - I'm not certain what was causing "length is 0 but internal vec says 600+" bug, but that is gone now
+    - Getting the peers to connect led to another design oversight - in discover network, peers get the pubkey from the bootnode's registry's payload field. which is in fact empty
+      - So changed up how pubkey was managed a little - a mix between arrayvec and fixed size [u8; 32] on the stack instead of previous Box<[u8]> impl
+    - Also removed unused crates (except crossfire! I need to use that instead of tokio channels), and general code cleanup  
+  - In all, testing the project under actual conditions - multiple validators - exposed some good bugs to squash
+  - Still need to change update loop so that leader only sends packets to bootnode when validator leaves, otherwise bootnode just stores joining packets directly
+
+- Oct 29th 
+  - Massive debugging breakthroughs. In order:
+	- The reasoning behind the timing out randomly bug was indeed because of the breakpoints - the process was paused, but the tokio timer read the OS clock delta, which was not
+    - Most importantly, peers were not connecting to each other because their addresses were garbage. I was mixing integers (ip octets) and utf8 (put ":") and treating the entire thing as utf8
+    - important architecture change - the peers also only send pubkeys one way! A peer connects to another and sends its pubkey, but doesn't get a pubkey back!
+      - The pubkey we took from the bootnode? Since the payloads are empty, they were trash!
+    - BIG TODO: Make it so that register socket has a PUBKEY argument - pubkeys need to be tied to addresses and IDs. Then continue with changes to update struct (adding pubkey field, having bootnode store pubkeys)
+
+- Oct 24th
+	- Seems like a massive race condition? Given nodes l, a b c and bootnode, a connects to bootnode and gets the leader's address from it, and then b connects to bootnode *before* leader can send a's address to bootnode, meaning b gets a stale registry?
+    - And then sometimes a peer will connect to bootnode, then have their connection time out so they don't ever get their ID or the regstiry at all?
+      - Massive Race condition to debug - clients are connecting to the bootnode in rapid succession before the leader node can send the updated list, so they're all getting stale registries
+      - So upon connection to the bootnode, the peer needs to be added to the registry immediately, and it seems like one of two moves should happen:
+        1. either the only time the leader node send the bootnode its registry is when a peer *leaves* (the entire reason why this architecture was made in the first place), or
+        2. the leader node sends the bootnode its registry at various intervals so that they stay in sync
+
 - Oct 20th
   - I have never seen such a collection of bugs before in my life. The fact that these are memory bugs are making me question my basic competency
 

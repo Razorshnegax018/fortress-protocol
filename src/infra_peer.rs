@@ -15,7 +15,7 @@ use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
 use futures::{SinkExt, StreamExt};
 
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 
 use serde::{Serialize, Deserialize};
 
@@ -27,13 +27,11 @@ use crate::{
 };
 
 use rand::rngs::OsRng;
-use ed25519_dalek::{Signer, SigningKey};
-use tokio::io::AsyncReadExt;
+use ed25519_dalek::SigningKey;
 
 static BOOTNODE_ADDRESS: &str = "127.0.0.1:1100";
 
 static LEADER_NODE_ID: AtomicU8 = AtomicU8::new(0);
-static SELF_ID: AtomicU8 = AtomicU8::new(0);
 
 /// Zero copy transport format that contains a node's type, its address, and its pubkey for ID, and the actual node_id
 #[derive(Serialize, Deserialize)]
@@ -54,11 +52,12 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
 
     let active_ids: ArrayVec<u8, 16> = ArrayVec::new();
     let active_indexes: ArrayVec<usize, 16> = ArrayVec::new();
+    let pubkeys: ArrayVec<[u8; 32], 16> = ArrayVec::new();
 
     // create the struct for tools for consensus
     let mut tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
         registry: [const { None }; 16], address_list, active_ids,
-        ids, active_indexes, len: 0, next_id: 0 };
+        ids, active_indexes, pubkeys, len: 0, next_id: 0 };
 
     // leader socket that may or may not exist
     let mut leader_socket = false;
@@ -92,30 +91,18 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
         send_connection_packet("peer-pubkey", &self_address, 
             Some(&self_pubkey), 0, &mut socket_framed, &mut serialize_pool).await?;
 
-        // get your node ID from the bootnode
-        /* let mut recieve_buf = Vec::with_capacity(684);
-        let mut socket = socket_framed.into_parts();
-
-        let bytes_read = socket.io.read_buf(&mut recieve_buf).await?;
-
-        if bytes_read == 0 { return return_err("nigga") } else { self_id = recieve_buf[0]; } */
-
-
+        // get the given node id from the bootnode
         match socket_framed.next().await {
             Some(Ok(mut value)) => {
                 if value.is_empty() { println!("ok dude why is this empty"); return return_err(""); }
                 self_id = value.get_u8();
             },
 
-            Some(Err(e)) => { println!("Error: {}", e); }
+            Some(Err(e)) => { println!("Node ID fetching error: {}", e); }
 
             None => { println!("socket closed"); }
         }
 
-        // let mut socket_framed = make_framed(socket.io, 1024);
-
-        // if deserialization of the connection packet from the bootnode fails,
-        // log the error and skip the packet
         if let Some(Ok(value)) = socket_framed.next().await {
             if let Ok(list) = deserialize_packet::<Vec<ConnectionPacket>>(&value) {
                 for packet in list {
@@ -124,7 +111,8 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
                     match TcpStream::connect(peer_addr).await {
 
                         // we need to spawn reader tasks for each of the sockets the bootnode gave us
-                        Ok(stream) => { 
+                        Ok(stream) => {
+
                             // 1) split the sockets into read and write and create frameds for them
                             let (reader, writer) = stream.into_split();
 
@@ -133,9 +121,10 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
 
                             // named "peer-pubkey", even though this is possibly the leader pubkey, to distinguish 
                             // from "self_pubkey", or even worse, the highly descriptive name of just "pubkey"
-                            let peer_pubkey = packet.payload;
+                            let Some(peer_pubkey) = packet.payload.as_array::<32>()
+                                else { eprintln!("failed to get it"); continue; };
 
-                            // 1) send a pubkey confirmation packet to peer
+                            // 2) send a pubkey confirmation packet to peer
                             if let Err(_) = send_connection_packet("peer-pubkey", &self_address,
                                 Some(&self_pubkey), self_id, &mut write_framed, &mut serialize_pool).await {
                                 eprintln!("Peer failed to connect to another peer"); todo!()
@@ -145,25 +134,23 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
 
                             let addr: SocketAddr = io_err(str::from_utf8(packet.address).unwrap().parse())?;
 
-                            // 2) add the writer into the registry
-                            if let Err(_) = tools.insert_socket(write_framed, addr, packet.node_id) {
+                            // 3) add the writer into the registry
+                            if let Err(_) = tools.insert_socket(write_framed, addr, *peer_pubkey, packet.node_id) {
                                 eprintln!("Peer failed to insert socket for new peer"); }
 
-                            // 2b) - if it's the leader node, then store their ID
+                            // 3b) - if it's the leader node, then store their ID
                             if packet.node_type == b"leader" {
-                                println!("packet received from leader node with id {}", packet.node_id );
-
                                 LEADER_NODE_ID.store(packet.node_id, Relaxed);
                                 leader_socket = true;
                             }
 
-                            // 3) clone the consensus engine sender to hand off to the reader task
+                            // 4) clone the consensus engine sender 
                             let peer_tx = engine_tx.clone();
 
                             // 4) then, for each reader, spawn a new reader task
-                            tokio::task::spawn(reader_task(read_framed, peer_tx, Box::from(peer_pubkey)));
+                            tokio::task::spawn(reader_task(read_framed, peer_tx, *peer_pubkey));
                         },
-                        Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", &*self_address); }
+                        Err(_) => { eprintln!("Unable to connect to peer w/ addr: {}", self_address); }
                     }
                 }
             } else if let Ok(refusal_packet) = deserialize_packet::<RefusalPacket>(&value) {
@@ -173,7 +160,7 @@ pub async fn discover_network(port: &str) -> io::Result<()> {
         }
     } 
 
-    if !leader_socket { panic!("No leader node found") }
+    if !leader_socket { panic!("No leader node found from peer w/ ID {self_id}") }
 
     if let Err(e) = start_server(tools, self_id, keypair, self_address, engine_tx, peer_rx).await
         { eprintln!("Peer node server exited with Error: {}", e); }
@@ -214,7 +201,7 @@ async fn start_server(
 
         // spawn consensus engine task
         let _consensus_task: JoinHandle<io::Result<()>> = std::thread::spawn(move || {
-            // pin the leader node thread to perf core
+            // apply high priority to consensus engine thread
             let applied = io_err(gdt_cpus::set_thread_priority(Highest))?;
             if applied.effective() != Highest { eprintln!("Failed to pin peer consensus engine to perf cluster"); }
 
@@ -223,12 +210,10 @@ async fn start_server(
                 // create the localset, so the task doesn't go into the general queue
                 let local = tokio::task::LocalSet::new();
 
-                // run the actor on the localset 
+                // run the actor on the localset and start/await on it
                 local.spawn_local(peer_consensus_actor(commit_sender, tools, peer_rx,
-                   registration_rx, signing_key, self_id));
-
-                // start the localset   
-                local.await; }); Ok(())
+                   registration_rx, signing_key, self_id)); local.await;
+            }); Ok(())
         });
 
         // whenever a new connection is opened...
@@ -236,10 +221,8 @@ async fn start_server(
         let sleep = tokio::time::sleep(Duration::from_millis(750)); tokio::pin!(sleep); 
 
         // create a buffer to store the result from the select
-        let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
+        let mut network_buffer: Option<Result<BytesMut, io::Error>>;
         while let Ok((socket, addr)) = listener.accept().await {
-            println!("Peer node {addr} connected to running peer node");
-
             let (read_socket, write_socket) = socket.into_split();
 
             // prepare the reader socket for reading
@@ -264,10 +247,14 @@ async fn start_server(
                     b"peer-pubkey" => {
                         // pass the read half and the request sender to a new reader task
                         let _peer_tx = engine_tx.clone();
-                        tokio::task::spawn(reader_task(read_framed, _peer_tx, Box::from(connection_packet.payload))); 
+
+                        let Some(stack_pubkey) = connection_packet.payload[0..32].as_array::<32>()
+                            else { eprintln!("failed to get peer's pubkey as fixed array"); continue };
+
+                        tokio::task::spawn(reader_task(read_framed, _peer_tx, *stack_pubkey));
 
                         // send a registration request to the consensus engine receiver to register the write half
-                        let request = RegistrationRequest { socket: write_socket, addr, node_id: connection_packet.node_id };
+                        let request = RegistrationRequest { socket: write_socket, addr, pubkey: *stack_pubkey, node_id: connection_packet.node_id };
 
                         io_err(registration_tx.send(request).await)?;
                     },
@@ -378,7 +365,7 @@ async fn peer_consensus_actor(
             let socket_framed = Framed::new(request.socket, socket_codec.clone());
 
             // add the socket and address to the registry
-            if let Err(_) = tools.insert_socket(socket_framed, request.addr, request.node_id) {
+            if let Err(_) = tools.insert_socket(socket_framed, request.addr, request.pubkey, request.node_id) {
                 eprintln!("Could not insert socket for registration"); continue;
             }
         }
@@ -487,7 +474,7 @@ pub async fn peer_consensus_engine(
     // peer needs to use the static thread local cell
     tools.sequence_counter += 1;
 
-    println!("Consensus has been reached with id {}", self_id);
+    println!("Consensus has been reached");
     
 
     Ok(())

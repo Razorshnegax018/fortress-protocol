@@ -1,8 +1,6 @@
 use std::{thread::JoinHandle, time::Duration};
 
 use crossbeam::{channel::{unbounded}, select};
-use gdt_cpus::ThreadPriority::Highest;
-use crate::utils::utils::io_err;
 
 mod infra_main;
 mod infra_peer;
@@ -83,14 +81,14 @@ fn main() -> tokio::io::Result<()> {
     
     let _another_peer_thread: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
 
-        std::thread::sleep(Duration::from_millis(1200));
+        std::thread::sleep(Duration::from_millis(2000));
         
         let _ = create_peer_node("127.0.0.1:3824"); Ok(())
     });
 
     let _third_peer: JoinHandle<tokio::io::Result<()>> = std::thread::spawn(move || {
 
-        std::thread::sleep(Duration::from_millis(2000));
+        std::thread::sleep(Duration::from_millis(4000));
 
         let _ = create_peer_node("127.0.0.1:2749"); Ok(())
     });

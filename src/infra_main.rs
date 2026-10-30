@@ -44,7 +44,7 @@ pub struct ClientTransaction<'a> {
 pub struct ConsensusToolsStruct {
     pub sequence_counter: u32, pub view_number: u32, pub registry: PeerRegistry,
     pub address_list: [SocketAddr; 16], pub len: usize, pub ids: [u8; 16], pub next_id: u8,
-    pub active_ids: ArrayVec<u8, 16>, pub active_indexes: ArrayVec<usize, 16>
+    pub active_ids: ArrayVec<u8, 16>, pub active_indexes: ArrayVec<usize, 16>, pub pubkeys: ArrayVec<[u8; 32], 16>,
 }
 
 // @impl methods to handle adding, deleting, and looking up sockets
@@ -84,7 +84,7 @@ impl ConsensusToolsStruct {
 
 
     /// adds a new socket to the registry
-    pub fn insert_socket(&mut self, socket: SocketFramed, addr: SocketAddr, id: u8) -> Result<u8, SocketFramed> {
+    pub fn insert_socket(&mut self, socket: SocketFramed, addr: SocketAddr, pubkey: [u8; 32], id: u8) -> Result<u8, SocketFramed> {
         // if registry set is full, error out
         if self.len >= 16 { return Err(socket); }
 
@@ -98,11 +98,10 @@ impl ConsensusToolsStruct {
         // assign the socket to said index, tying the socket, the id, and the index together
         self.registry[idx] = Some(socket);
 
-        // add the id to the "active-ids" list
+        // add the id, index, and pubkey to their respective lists
         self.active_ids.push(id);
-
-        // add the index to the "active-indexes" list
         self.active_indexes.push(idx);
+        self.pubkeys.push(pubkey);
 
         // increment the registry length and next-id parameter
         self.next_id += 1; self.len += 1; 
@@ -119,7 +118,6 @@ impl ConsensusToolsStruct {
         // find the active id array index
         let Some(id_idx) = self.active_indexes.iter().position(|&id| id == target_id as usize) 
             else { eprintln!("Target ID to remove does not exist in list"); return None };
-
 
         // remove the socket's id and index from each active array
         self.active_ids.remove(id_idx);
@@ -165,11 +163,11 @@ pub enum ActorRequest {
     PeerVote { vote_type: Bytes, signed_msg: Bytes, pubkey: [u8; 32], payload: Bytes }
 }
 
-pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: SocketAddr, pub node_id: u8 }
+pub struct RegistrationRequest { pub socket: OwnedWriteHalf, pub addr: SocketAddr, pub pubkey: [u8; 32], pub node_id: u8 }
 
 /// Structure that the leader node uses to communicate with the bootnode
 #[derive(Serialize, Deserialize)]
-pub struct RegistryUpdate<'a> { pub addrs: [SocketAddr; 16], pub ids: &'a [u8] }
+pub struct RegistryUpdate<'a> { pub addrs: [SocketAddr; 16], pub ids: &'a [u8], pub pubkeys: ArrayVec<[u8; 32], 16> }
 
 pub static DEFAULT_ADDR: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0);
 
@@ -181,11 +179,12 @@ pub async fn start_server() -> io::Result<()> {
 
     let active_ids: ArrayVec<u8, 16> = ArrayVec::new();
     let active_indexes: ArrayVec<usize, 16> = ArrayVec::new();
+    let pubkeys: ArrayVec<[u8; 32], 16> = ArrayVec::new();
 
     let listener = TcpListener::bind(ADDRESS).await?;
     let tools = ConsensusToolsStruct { sequence_counter: 0, view_number: 0, 
         registry: [const { None }; 16], address_list, ids,
-        active_ids, active_indexes, len: 0, next_id: 0 };
+        active_ids, active_indexes, len: 0, next_id: 0, pubkeys };
 
     println!("Server started at {}", ADDRESS);
 
@@ -213,6 +212,7 @@ pub async fn start_server() -> io::Result<()> {
 
     let commit_sender = transaction_sender.clone();
 
+    // get a handle to the current runtime so there aren't two reactors competing for I/O control
     let handle = Handle::current();
 
     // Start the consensus actor thread
@@ -225,10 +225,11 @@ pub async fn start_server() -> io::Result<()> {
         handle.block_on( async move {
             let local = tokio::task::LocalSet::new();
 
-            local.spawn_local(leader_consensus_actor(
-                commit_sender, tools, peer_receiver, registration_rx)); 
+            // run the actor on the local set and then start/await on it
+            local.spawn_local(leader_consensus_actor(commit_sender, tools,
+                peer_receiver, registration_rx)); local.await;
                 
-            local.await; }); Ok(())
+        }); Ok(())
     });
 
     // create a reusable timout timer
@@ -239,15 +240,13 @@ pub async fn start_server() -> io::Result<()> {
     // create a buffer to store the result from the select
     let mut network_buffer: Option<Result<BytesMut, io::Error>>;
     while let Ok((socket, _)) = listener.accept().await {
-        println!("Peer node  connected to primary");
-
         let (read_socket, write_socket) = socket.into_split();
 
         // prepare the reader socket for reading
         let mut read_framed = make_framed(read_socket, 512);
 
         // start the timer
-        reset_timer(&mut sleep, 2000);
+        reset_timer(&mut sleep, 750);
 
         // select between the connected client responding and a timeout
         tokio::select! { value = read_framed.next() => { network_buffer = value } 
@@ -265,11 +264,17 @@ pub async fn start_server() -> io::Result<()> {
 
             // pass the read half and the request sender to a new reader task
             let _peer_tx = peer_tx.clone();
-            tokio::task::spawn(reader_task(read_framed, _peer_tx, Box::from(pubkey_packet.payload))); 
+
+            // get the peers' pubkey as a fixed size array
+            let Some(stack_pubkey) = pubkey_packet.payload[0..32].as_array::<32>()
+                else { eprintln!("failed to get peer's pubkey as fixed array"); continue };
+
+            // spawn the reader task for the peer
+            tokio::task::spawn(reader_task(read_framed, _peer_tx, *stack_pubkey));
 
             // send a registration request to the consensus engine receiver to register the write half
             let addr: SocketAddr = io_err(std::str::from_utf8(&pubkey_packet.address).unwrap().parse())?;
-            let request = RegistrationRequest { socket: write_socket, addr, node_id: pubkey_packet.node_id };
+            let request = RegistrationRequest { socket: write_socket, addr, pubkey: *stack_pubkey, node_id: pubkey_packet.node_id };
 
             io_err(registration_tx.send(request).await)?;
 
@@ -343,14 +348,12 @@ pub async fn leader_consensus_actor(
             let socket_framed = Framed::new(request.socket, socket_codec.clone());
 
             // add the socket and address to the registry
-            if let Err(_) = tools.insert_socket(socket_framed, request.addr, request.node_id) {
+            if let Err(_) = tools.insert_socket(socket_framed, request.addr, request.pubkey, request.node_id) {
                 eprintln!("Could not insert socket for registration"); continue;
             }
 
-            println!("given ID: {:?}", request.node_id);
-
             // construct the registry update packet
-            let updated_registry = RegistryUpdate { addrs: tools.address_list, ids: tools.active_ids.as_ref() };
+            let updated_registry = RegistryUpdate { addrs: tools.address_list, pubkeys: tools.pubkeys.clone(), ids: tools.active_ids.as_ref() };
 
             // serialize the addresses into the heap buffer
             let addr_packet = serialize_into(&mut serialize_pool, &updated_registry);
@@ -367,7 +370,7 @@ pub async fn leader_consensus_actor(
 /// * @param read_socket: the read half of the connection's socket, 
 /// to receive that connection's requests
 /// * @param peer_tx: sender channel to send transaction requests to the consensus actor
-pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: Box<[u8]>) -> io::Result<()> {
+pub async fn reader_task(mut read_framed: ReadFramed, peer_tx: mpsc::Sender<ActorRequest>, pubkey: [u8; 32]) -> io::Result<()> {
     // wait for messages from peer
     // framed next for the socket codec - framing entire messages
     while let Some(Ok(read_buffer)) = read_framed.next().await {

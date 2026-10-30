@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{io::{AsyncReadExt, AsyncWriteExt}, net::{TcpStream, tcp::OwnedWriteHalf}, sync::mpsc, time::{Instant, Sleep}};
 use tokio_util::{codec::{Framed, LengthDelimitedCodec}};
 
-use crate::{infra_main::{ActorRequest, ConsensusTools}, infra_peer::{ConnectionPacket, SocketFramed}};
+use crate::{infra_main::{ActorRequest, ConsensusTools}, infra_peer::ConnectionPacket};
 
 use heapless::index_set::FnvIndexSet;
 
@@ -241,9 +241,7 @@ pub async fn peer_wait_for_quorum(
     }
 
 
-    while let Some(value) = vote_receiver.recv().await {
-
-    }
+    while let Some(value) = vote_receiver.recv().await {}
 } 
 
 /// @util takes a AsyncRead type - TcpStream, OwnedReadHalf - and makes a framed from it

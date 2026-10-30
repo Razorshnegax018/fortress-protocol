@@ -1,4 +1,4 @@
-use std::{net::IpAddr, rc::Rc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 use serde::Serialize;
 use tokio::{io, net::{TcpListener, TcpStream}, sync::{Mutex, oneshot}};
@@ -9,10 +9,9 @@ use bytes::{BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
 
 use std::cell::Cell;
-use tokio::io::AsyncWriteExt;
 use tokio::task::JoinHandle;
-use crate::{infra_main::RegistryUpdate, infra_peer::ConnectionPacket, utils::utils::{deserialize_packet, make_framed, reset_timer}};
-use crate::utils::utils::send_connection_packet;
+use crate::{infra_main::RegistryUpdate, infra_peer::ConnectionPacket,
+	utils::utils::{deserialize_packet, make_framed, reset_timer}};
 
 pub static BOOTNODE_ADDRESS: &'static str = "127.0.0.1:1100";
 
@@ -65,21 +64,18 @@ pub async fn start_bootnode() {
 			// while there are still address bytes in the network buffer
 			// copy the entire value from the network into the list buffer
 			for idx in 0..update_struct.ids.len() {
-				// grab the address and the id
-				let addr = update_struct.addrs[idx];
+				// grab id, address, and pubkey
 				let id = update_struct.ids[idx];
+				let addr = update_struct.addrs[idx];
+				let pubkey = update_struct.pubkeys[idx];
 
-				// derive the IP from the address
-				let mut ip = match addr.ip() { IpAddr::V4(ip) => ip.octets().to_vec(),
-					IpAddr::V6(v6) => v6.octets().to_vec() };
-
-				// craft the full address using the ip and port
-				ip.extend_from_slice(":".as_bytes()); ip.put_u16(addr.port());
+				// serialize the address into utf8 bytes
+				let addr_bytes = Bytes::from(addr.to_string().as_bytes().to_vec());
 
 				// make the connection packet for storage (simply re-attach the given node id)
 				let packet = StoragePacket {
-					node_type: b"peer", address: Bytes::copy_from_slice(&ip),
-					payload: Bytes::new(), node_id: id };
+					node_type: b"peer", address: Bytes::copy_from_slice(&addr_bytes),
+					payload: Bytes::copy_from_slice(&pubkey), node_id: id };
 
 				// extend the list with the new connection packet
 				write_lock.push(packet);
@@ -98,9 +94,6 @@ pub async fn start_bootnode() {
 	let join_task: JoinHandle<io::Result<()>> = tokio::task::spawn_local(async move {
 		// create the payload buffer to store cached address lists
 		let mut payload = BytesMut::with_capacity(1024);
-		
-		// a separate, smaller pool to be used for serialization (to avoid overwriting the cache)
-		let mut send_pool = BytesMut::with_capacity(256);
 
 		// create a buffer to store the result from the select
     	let mut network_buffer: Option<Result<BytesMut, std::io::Error>>;
@@ -115,13 +108,14 @@ pub async fn start_bootnode() {
 		// create the option wrapper for the leader sender
 		let mut leader_tx = Some(_leader_tx);
 		while let Ok((socket, addr)) = listener.accept().await {
-			println!("FROM BOOTNODE - New node addr {} joined", addr.to_string());
-
-			reset_timer(&mut sleep, 750);
+			println!("FROM BOOTNODE - New node joined");
 
 			// create a framed for the connected machine - leader or peer
 			// TODO - dynamically split and rebuild to change size depending of if it's leader or peer
 			let mut socket_framed = make_framed(socket, 1024);
+
+			// reset the timer for the following timeout
+			reset_timer(&mut sleep, 750);
 
 			// select between the connected client responding and a timeout
         	tokio::select! { value = socket_framed.next() => { network_buffer = value } 
@@ -190,21 +184,16 @@ pub async fn start_bootnode() {
 						let mut given_peer_id: Vec<u8> = Vec::new(); given_peer_id.push(NODE_ID_COUNTER.get());
 						socket_framed.send(Bytes::from(given_peer_id)).await?;
 
-						reset_timer(&mut sleep, 750);sleep.as_mut().await;
-
 
 						/* if let Err(_) = send_connection_packet("bootnode", BOOTNODE_ADDRESS, None,
 							NODE_ID_COUNTER.get(), &mut socket_framed, &mut send_pool).await {
 							eprintln!("Failed to send connection packet to peer node "); continue;
 						} */
 
-						let value = NODE_ID_COUNTER.get();
-
 						// if the registry has been updated, rebuild the payload
 						UPDATED_LIST.with(|updated| { if updated.get() {
 								// clear out the old payload/address list and reserve enough space in it
 								payload.clear(); payload.reserve(list.len() * size_of::<StoragePacket>());
-								println!("is should run this three times, each time with growing list len: {}", list.len());
 
 								// serialize the address list into the payload
 								bincode::serialize_into((&mut payload).writer(), list).unwrap();
@@ -212,13 +201,11 @@ pub async fn start_bootnode() {
 						});
 						
 						// send the full address list to the client alongside the assigned ID
-						println!("payload length: {}", payload.len());
 						if let Err(_) = socket_framed.send(payload.clone().freeze()).await {
 							eprintln!("Failed to send response to connecting peer node"); continue; }
 
 						NODE_ID_COUNTER.set(NODE_ID_COUNTER.get() + 1);
 
-						println!("List sent to addr");
 					}, _ => { eprintln!("Bootnode received bad packet"); continue; }
 				}
 			}
